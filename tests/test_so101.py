@@ -1,4 +1,5 @@
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -25,6 +26,8 @@ def hardware(monkeypatch):
             self.arguments = (port, robot_id, calibration_dir, max_relative_target)
             self.cameras, self.commands, self.disconnected = cameras, [], 0
             self.position = np.array([1., 2., 3., 4., 5., 40.])
+            self.config = SimpleNamespace(num_read_retries=0)
+            self.bus = SimpleNamespace(sync_read=lambda _, num_retry: dict(zip(so101.MOTORS, self.position)))
             opened.append(self)
         def get_observation(self):
             raw = {f'{motor}.pos': value for motor, value in zip(so101.MOTORS, self.position)}
@@ -107,6 +110,63 @@ def test_failed_return_still_releases_and_is_reported(hardware):
     with pytest.raises(RuntimeError, match='SO101 shutdown failed'):
         robot.close()
     assert hardware[0].disconnected == 1
+
+
+class Camera:
+    def __init__(self, alive=True, connect_failures=0):
+        self.alive, self.connect_failures, self.connects = alive, connect_failures, 0
+    def read_latest(self):
+        if not self.alive:
+            raise RuntimeError('read thread is not running.')
+        return np.zeros((2, 4, 3), np.uint8)
+    def disconnect(self):
+        self.alive = False
+    def connect(self):
+        self.connects += 1
+        if self.connects <= self.connect_failures:
+            raise ConnectionError('Failed to open camera')
+        self.alive = True
+
+
+def with_cameras(follower, cameras):
+    read = follower.get_observation
+    def observe():
+        for camera in cameras.values():
+            camera.read_latest()
+        return read()
+    follower.get_observation = observe
+    follower.cameras = cameras
+
+
+def test_dropped_camera_is_reconnected_and_read_again(hardware):
+    robot = make_robot(config())
+    head, wrist = Camera(), Camera(alive=False, connect_failures=2)
+    with_cameras(hardware[0], {'head_image': head, 'left_image': wrist})
+    obs = robot.get_observation()
+    assert obs.images.keys() == {'head_image', 'left_image'}
+    assert wrist.connects == 3 and head.connects == 0
+
+
+def test_camera_that_never_returns_fails_and_still_homes(hardware, monkeypatch):
+    robot = make_robot(config(return_step_deg=2))
+    robot.execute([11, 2, 3, 4, 5, 40])
+    with_cameras(hardware[0], {'head_image': Camera(), 'left_image': Camera(alive=False, connect_failures=10**6)})
+    clock = iter(range(0, 10**6, 10))
+    monkeypatch.setattr(so101.time, 'monotonic', lambda: next(clock))
+    with pytest.raises(RuntimeError, match='left_image did not reconnect'):
+        robot.get_observation()
+    robot.close()
+    np.testing.assert_allclose(hardware[0].commands[-1], [1, 2, 3, 4, 5, 40])
+
+
+def test_motor_errors_are_not_treated_as_camera_drops(hardware):
+    robot = make_robot(config())
+    def fail():
+        raise ConnectionError('Incorrect status packet!')
+    hardware[0].get_observation = fail
+    hardware[0].cameras = {'head_image': Camera()}
+    with pytest.raises(ConnectionError, match='status packet'):
+        robot.get_observation()
 
 
 def test_images_are_resized_to_the_configured_size(hardware):

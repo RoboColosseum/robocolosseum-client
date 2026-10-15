@@ -21,6 +21,10 @@ _CAMERA_TYPES = ('realsense', 'opencv')
 _RETURN_HZ = 30
 _CONNECT_ATTEMPTS = 3
 _SETTLE_SECONDS = 0.5
+# A wrist USB camera can drop off the bus when its cable flexes; the kernel
+# may need up to about a minute to re-enumerate it after a failed handshake.
+_CAMERA_RECOVERY_SECONDS = 90
+_CAMERA_RETRY_SECONDS = 1.0
 
 
 def _vector(value, size, name):
@@ -178,11 +182,53 @@ class SO101Robot(Robot):
     def get_observation(self):
         if self.closed:
             raise RuntimeError('SO101 is closed')
-        raw = self.follower.get_observation()
+        raw = self._read_follower()
         positions = self._positions(raw)
         images = {role: self._image(raw, role) for role in self.follower.cameras}
         return RobotObservation(images, positions[:5].astype(np.float32), positions[5:].astype(np.float32),
                                 np.empty(0, dtype=np.float32))  # FK is unavailable, not zero.
+
+    def _read_follower(self):
+        """Read motors and cameras, reconnecting any camera whose USB link dropped."""
+        try:
+            return self.follower.get_observation()
+        except Exception as exc:
+            failed = self._failed_cameras()
+            if not failed:
+                raise
+            log.warning('SO101 camera(s) %s stopped (%s); reconnecting', ', '.join(failed), exc)
+            self._reconnect_cameras(failed, exc)
+            return self.follower.get_observation()
+
+    def _failed_cameras(self):
+        failed = []
+        for role, camera in self.follower.cameras.items():
+            try:
+                camera.read_latest()
+            except Exception:
+                failed.append(role)
+        return failed
+
+    def _reconnect_cameras(self, roles, cause):
+        # The arm holds its last commanded pose under torque while we wait.
+        deadline = time.monotonic() + _CAMERA_RECOVERY_SECONDS
+        for role in roles:
+            camera = self.follower.cameras[role]
+            while True:
+                try:
+                    camera.disconnect()
+                except Exception:
+                    log.debug('SO101 camera %s cleanup before reconnect failed', role, exc_info=True)
+                try:
+                    camera.connect()
+                    break
+                except Exception:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(f'SO101 camera {role} did not reconnect within '
+                                           f'{_CAMERA_RECOVERY_SECONDS}s; check its USB cable') from cause
+                    log.debug('SO101 camera %s reconnect attempt failed', role, exc_info=True)
+                    time.sleep(_CAMERA_RETRY_SECONDS)
+            log.warning('SO101 camera %s reconnected', role)
 
     def _send(self, positions):
         self.follower.send_action({f'{motor}.pos': float(v) for motor, v in zip(MOTORS, positions)})
@@ -197,8 +243,13 @@ class SO101Robot(Robot):
         value[5] = np.clip(value[5], *GRIPPER_RANGE)
         self._send(value)
 
+    def _joint_positions(self):
+        """Motor positions only, so homing still works after a camera is lost."""
+        raw = self.follower.bus.sync_read('Present_Position', num_retry=self.follower.config.num_read_retries)
+        return self._positions({f'{motor}.pos': value for motor, value in raw.items()})
+
     def _move_to(self, target):
-        current = self._positions(self.follower.get_observation())
+        current = self._joint_positions()
         steps = int(np.ceil(np.max(np.abs(target - current)) / self.return_step))
         for index in range(1, steps + 1):
             self._send(current + (target - current) * index / steps)
