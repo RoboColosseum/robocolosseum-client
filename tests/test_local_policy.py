@@ -126,7 +126,7 @@ async def test_ready_starts_inference_without_router_ack(monkeypatch, receipt, p
         await asyncio.wait_for(c.connect(evaluation_run=c.run_id),.2)
         assert not ack.is_set()
         await asyncio.wait_for(c.before_action(0),.1)
-        assert c.reports.qsize()==1
+        assert c.reports.empty()
         c.ensure_active()
     finally:
         for task in [c.receiver_task,c.reporting_task,c.heartbeat_task]:

@@ -320,7 +320,9 @@ class LocalPolicyClient(ColosseumClient):
             self.failure = exc
 
     async def before_action(self, step):
-        self._queue_report('step', 'step', step=step)
+        # Router local mode permits omitted step reports. Keep failure checks
+        # for cached actions while heartbeat and finish report lifecycle state.
+        self.ensure_active()
 
     async def infer(self, observation, *, deadline_ms=1000):
         self.ensure_active()

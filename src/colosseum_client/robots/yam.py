@@ -265,7 +265,7 @@ class YAMRobot(Robot):
                 else:
                     self.arms.append(_open_arm(channel, calibration, calibration_offset=offset))
             self._read_positions()
-            self._start_gripper_telemetry()
+            # Periodic gripper telemetry is disabled to keep trial output readable.
         except BaseException:
             try:
                 self.close()
