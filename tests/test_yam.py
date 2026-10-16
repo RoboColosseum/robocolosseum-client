@@ -699,7 +699,7 @@ async def test_local_trial_yam_contract_and_hardware_open_after_confirmation(tmp
     class Client:
         def __init__(self, config, *args, **kwargs):
             assert kwargs['joint_count'] == 12
-            assert kwargs['action_spaces'] == {'joint_position': 14}
+            assert kwargs['action_spaces'] == {'joint_position': 14, 'eef_abs_pose': 14}
             self.model = {'action_space': 'joint_position', 'action_dim': 14}
         async def connect(self, **kwargs):
             assert not hardware
