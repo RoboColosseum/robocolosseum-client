@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Eval Station</title>
+<style>
+:root{
+  --bg:#f4f5f7;--panel:#ffffff;--panel2:#f8f9fb;--fg:#15171c;--mut:#6a7180;--line:#e3e6eb;
+  --acc:#3b5bfd;--acc2:#e9edff;--ok:#12a150;--okbg:#e6f6ec;--bad:#d93a2b;--badbg:#fdecea;--warn:#c27803;--warnbg:#fff4de;
+  --shadow:0 1px 2px rgba(16,24,40,.05),0 4px 16px rgba(16,24,40,.06);--r:16px;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0e1014;--panel:#171a21;--panel2:#1d2129;--fg:#eceef2;--mut:#9199a8;--line:#2a2f3a;
+  --acc:#7c93ff;--acc2:#232b4d;--ok:#3ccf7c;--okbg:#14301f;--bad:#ff6b5e;--badbg:#3a1a17;--warn:#f0b34a;--warnbg:#3a2c12;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 24px rgba(0,0,0,.35)}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+button{font:inherit;cursor:pointer;border:0;border-radius:10px;padding:10px 18px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);transition:.15s}
+button:hover:not(:disabled){filter:brightness(.97);transform:translateY(-1px)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--acc);color:#fff;border-color:transparent;font-weight:600}
+button.big{padding:14px 28px;font-size:17px;border-radius:12px}
+button.danger{background:var(--bad);color:#fff;border-color:transparent}
+button.ghost{background:transparent}
+button.small{padding:6px 12px;font-size:13px;border-radius:8px}
+input,textarea,select{font:inherit;color:var(--fg);background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
+input:focus,textarea:focus,select:focus{outline:2px solid var(--acc);outline-offset:0;border-color:transparent}
+textarea{resize:vertical;min-height:90px}
+label{display:block;font-weight:600;font-size:13px;margin:14px 0 6px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+.mut{color:var(--mut)}
+header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.bar{max-width:1320px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px}
+.brand .logo{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,var(--acc),#9b5cff);display:grid;place-items:center;color:#fff;font-size:16px}
+.steps{display:flex;gap:6px;margin-left:auto;background:var(--panel);padding:5px;border-radius:12px;border:1px solid var(--line)}
+.steps button{border:0;background:transparent;padding:8px 16px;display:flex;align-items:center;gap:8px;color:var(--mut)}
+.steps button.on{background:var(--acc2);color:var(--acc);font-weight:600}
+.steps .n{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:var(--line);color:var(--fg)}
+.steps button.on .n{background:var(--acc);color:#fff}
+.steps button.done .n{background:var(--ok);color:#fff}
+main{max-width:1320px;margin:0 auto;padding:24px 20px 60px}
+.view{display:none}.view.on{display:block;animation:fade .25s}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+h1{font-size:28px;margin:0 0 4px;letter-spacing:-.02em}
+h2{font-size:18px;margin:0}
+.lead{color:var(--mut);margin:0 0 22px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:20px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.spread{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.grid{display:grid;gap:16px}
+.checks{grid-template-columns:repeat(auto-fill,minmax(360px,1fr))}
+.check{display:flex;gap:14px;align-items:flex-start}
+.check .body{flex:1;min-width:0}
+.check .detail{color:var(--mut);font-size:14px;margin-top:2px;word-break:break-word}
+.check .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.ico{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;font-size:20px;font-weight:700;background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
+.ico.ok{background:var(--okbg);color:var(--ok);border-color:transparent}
+.ico.fail{background:var(--badbg);color:var(--bad);border-color:transparent}
+.ico.running{border:3px solid var(--acc2);border-top-color:var(--acc);animation:spin .8s linear infinite;font-size:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+.check.wide{grid-column:1/-1}
+.cams{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}
+.cam{position:relative;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:4/3;display:grid;place-items:center;color:#888;font-size:13px}
+.cam img{width:100%;height:100%;object-fit:cover;display:block}
+.cam .tag{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;font-size:12px;padding:3px 8px;border-radius:20px;display:flex;gap:6px;align-items:center}
+.tick{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--ok);color:#fff;font-size:11px}
+.hero{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.two{display:grid;grid-template-columns:minmax(320px,440px) 1fr;gap:20px;align-items:start}
+@media(max-width:960px){.two{grid-template-columns:1fr}.cams{grid-template-columns:1fr}}
+.live{position:relative;background:#000;border-radius:var(--r);overflow:hidden;aspect-ratio:4/3;box-shadow:var(--shadow)}
+.live img{width:100%;height:100%;object-fit:contain;display:block}
+.live .empty{position:absolute;inset:0;display:grid;place-items:center;color:#9aa;text-align:center;padding:20px}
+.overlay{position:absolute;left:0;right:0;padding:14px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.overlay.top{top:0;background:linear-gradient(rgba(0,0,0,.55),transparent)}
+.overlay.bot{bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.65));flex-direction:column;align-items:stretch}
+.chip{background:rgba(255,255,255,.14);backdrop-filter:blur(6px);color:#fff;padding:6px 12px;border-radius:30px;font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px}
+.chip.A{background:#3b5bfd}.chip.B{background:#d0439a}
+.dot{width:9px;height:9px;border-radius:50%;background:#ff4d4d;box-shadow:0 0 0 0 rgba(255,77,77,.7);animation:pulse 1.4s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 8px rgba(255,77,77,0)}100%{box-shadow:0 0 0 0 rgba(255,77,77,0)}}
+.prog{height:8px;border-radius:8px;background:rgba(255,255,255,.2);overflow:hidden;margin-top:8px}
+.prog>div{height:100%;background:linear-gradient(90deg,#7c93ff,#b07cff);width:0;transition:width .3s}
+.stepnums{color:#fff;font-variant-numeric:tabular-nums;font-size:14px;display:flex;justify-content:space-between}
+.timeline{display:grid;gap:10px;margin:16px 0}
+.tl{display:flex;gap:12px;align-items:center;padding:12px 14px;border-radius:12px;background:var(--panel2);border:1px solid var(--line)}
+.tl .ico{width:30px;height:30px;font-size:14px}
+.tl.cur{border-color:var(--acc);background:var(--acc2)}
+.banner{border-radius:12px;padding:12px 16px;margin-bottom:16px;display:flex;gap:10px;align-items:flex-start}
+.banner.warn{background:var(--warnbg);color:var(--warn)}
+.banner.bad{background:var(--badbg);color:var(--bad)}
+.banner.ok{background:var(--okbg);color:var(--ok)}
+.banner.info{background:var(--acc2);color:var(--acc)}
+details.log{margin-top:16px}
+details.log summary{cursor:pointer;color:var(--mut);font-size:14px}
+pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;max-height:280px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-word;margin:8px 0 0}
+.modal{position:fixed;inset:0;background:rgba(10,12,18,.55);backdrop-filter:blur(4px);display:none;place-items:center;z-index:20;padding:20px}
+.modal.on{display:grid;animation:fade .2s}
+.modal .card{max-width:520px;width:100%;padding:28px}
+.modal h2{font-size:22px;margin-bottom:8px}
+.modal .acts{display:flex;gap:10px;justify-content:flex-end;margin-top:22px;flex-wrap:wrap}
+.revgrid{display:grid;grid-template-columns:300px 1fr;gap:20px;align-items:start}
+@media(max-width:960px){.revgrid{grid-template-columns:1fr}}
+.evlist{display:grid;gap:6px;max-height:75vh;overflow:auto;padding:8px}
+.evitem{text-align:left;padding:10px 12px;border-radius:10px;border:1px solid transparent;background:transparent;display:block;width:100%}
+.evitem.on{background:var(--acc2);border-color:var(--acc)}
+.evitem .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em}
+.badge.review{background:var(--warnbg);color:var(--warn)}.badge.scored{background:var(--acc2);color:var(--acc)}
+.badge.submitted{background:var(--okbg);color:var(--ok)}.badge.discarded,.badge.superseded,.badge.interrupted{background:var(--panel2);color:var(--mut)}
+.ab{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:1100px){.ab{grid-template-columns:1fr}}
+.side h2{display:flex;align-items:center;gap:8px}
+.vmain{width:100%;border-radius:12px;background:#000;aspect-ratio:4/3;display:block}
+.vsmall{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.vsmall video{width:100%;border-radius:10px;background:#000;aspect-ratio:4/3}
+.score{display:flex;align-items:center;gap:14px;margin-top:6px}
+.score input[type=range]{flex:1;accent-color:var(--acc);padding:0;background:none;border:0}
+.score .num{width:84px;text-align:center;font-size:20px;font-weight:700}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.seg button{padding:14px;font-weight:600}
+.seg button.on{background:var(--acc);color:#fff;border-color:transparent}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:12px 20px;border-radius:12px;box-shadow:var(--shadow);z-index:30;opacity:0;transition:.25s;pointer-events:none;max-width:90vw}
+.toast.on{opacity:1}
+.pill{font-size:13px;padding:5px 12px;border-radius:20px;background:var(--panel);border:1px solid var(--line);display:flex;gap:8px;align-items:center;color:var(--mut)}
+.pill .d{width:8px;height:8px;border-radius:50%;background:var(--mut)}
+.pill.ok .d{background:var(--ok)}.pill.fail .d{background:var(--bad)}.pill.running .d{background:var(--warn)}
+</style>
+</head>
+<body>
+<header><div class="bar">
+  <div class="brand"><div class="logo">◆</div><div>Eval Station<div class="mut" style="font-size:12px;font-weight:500" id="sub"></div></div></div>
+  <div class="pill" id="srvpill"><span class="d"></span><span>Policy Server</span></div>
+  <nav class="steps">
+    <button data-v="setup"><span class="n">1</span>Setup</button>
+    <button data-v="record"><span class="n">2</span>Record</button>
+    <button data-v="review"><span class="n">3</span>Review</button>
+  </nav>
+</div></header>
+
+<main>
+<!-- 1. SETUP -->
+<section class="view" id="v-setup">
+  <div class="hero">
+    <div><h1>Get the robot ready</h1><p class="lead" style="margin:0">Run the checks once after switching the rig on. Everything should turn green.</p></div>
+    <div class="row"><button class="primary big" id="runall">Run all checks</button></div>
+  </div>
+  <div class="grid checks" id="checks"></div>
+  <div class="spread" style="margin-top:24px">
+    <span class="mut" id="readymsg"></span>
+    <button class="primary big" id="toRecord">Continue to recording →</button>
+  </div>
+</section>
+
+<!-- 2. RECORD -->
+<section class="view" id="v-record">
+  <div id="rec-form">
+    <div class="hero"><div><h1>New evaluation</h1><p class="lead" style="margin:0">Describe the task. The Router picks two policies, A and B, and the robot tries the task once with each.</p></div></div>
+    <div id="pendingBanner"></div>
+    <div class="two">
+      <div class="card">
+        <label for="instruction">Task for the robot</label>
+        <textarea id="instruction" placeholder="e.g. Pick up the red cup and place it on the plate"></textarea>
+        <label for="scene">Scene / location</label>
+        <input id="scene" placeholder="e.g. nus">
+        <div class="row" style="gap:12px">
+          <div style="flex:1;min-width:140px"><label for="evaluator">Your name</label><input id="evaluator" placeholder="optional"></div>
+          <div style="width:140px"><label for="maxsteps">Max steps</label><input id="maxsteps" type="number" min="1" step="1"></div>
+        </div>
+        <details style="margin-top:14px"><summary class="mut" style="cursor:pointer">Continue an interrupted evaluation</summary>
+          <label for="resume">Evaluation</label><select id="resume"><option value="">— start a new one —</option></select>
+        </details>
+        <button class="primary big" id="start" style="width:100%;margin-top:22px">Start evaluation</button>
+        <p class="mut" style="font-size:13px;margin:10px 0 0">You'll confirm before the robot moves. Keep the emergency stop within reach.</p>
+      </div>
+      <div>
+        <div class="live"><img id="pv" alt=""><div class="empty" id="pvEmpty">Top camera preview<br><button class="small" id="pvBtn" style="margin-top:10px">Show camera</button></div>
+          <div class="overlay top"><span class="chip">Top camera</span></div></div>
+        <p class="mut" style="font-size:13px">Check the scene looks right before you start.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="rec-run" style="display:none">
+    <div class="two" style="grid-template-columns:1fr minmax(300px,380px)">
+      <div class="live"><img id="lv" alt=""><div class="empty" id="lvEmpty"></div>
+        <div class="overlay top"><span class="chip" id="sideChip">Policy</span><span class="chip" id="phaseChip"></span></div>
+        <div class="overlay bot"><div class="stepnums"><span id="stepTxt">Step 0</span><span id="pctTxt"></span></div><div class="prog"><div id="progBar"></div></div></div>
+      </div>
+      <div class="card">
+        <div class="mut" style="font-size:13px;text-transform:uppercase;letter-spacing:.04em;font-weight:600">Task</div>
+        <div id="runTask" style="font-size:17px;font-weight:600;margin-top:4px"></div>
+        <div class="timeline" id="timeline"></div>
+        <div id="runMsg" class="banner info" style="display:none"></div>
+        <div id="finishBox"><button class="big" id="finishBtn" style="width:100%">■ Finish this run now</button>
+        <p class="mut" style="font-size:13px">Ends the current run early. The arms return to zero and the recording is kept. For an emergency, use the physical stop button.</p></div>
+        <div id="doneBox" style="display:none"><button class="primary big" id="toReview" style="width:100%">Score this evaluation →</button></div>
+        <div id="errBox" style="display:none"><button class="big" id="backForm" style="width:100%">Back to the form</button></div>
+      </div>
+    </div>
+    <details class="log"><summary>Technical log</summary><pre id="log"></pre></details>
+  </div>
+</section>
+
+<!-- 3. REVIEW -->
+<section class="view" id="v-review">
+  <div class="revgrid">
+    <div class="card" style="padding:8px"><div class="spread" style="padding:10px 10px 4px"><h2>Evaluations</h2><button class="small ghost" id="refresh">↻</button></div><div class="evlist" id="evlist"></div></div>
+    <div id="evdetail"><div class="card mut">Pick an evaluation on the left.</div></div>
+  </div>
+</section>
+</main>
+
+<div class="modal" id="modal"><div class="card">
+  <h2 id="mTitle"></h2><p class="mut" id="mBody" style="margin:0"></p>
+  <div id="mInput" style="display:none;margin-top:14px"><input id="mText"></div>
+  <div class="acts" id="mActs"></div>
+</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let ST=null, CFG={}, view='setup', evSel=null, lastPromptId=null, wantPreview=false;
+const CHECKS=[
+ ['gpu','GPU is free','Nothing else is using the graphics card.',[['Check','gpu'],['Free GPU','free_gpu']]],
+ ['can','Robot connection (CAN)','The cables from the computer to both arms.',[['Check','can'],['Bring CAN up','can_reset']]],
+ ['arms','Both arms respond','Every motor in the left and right arm answers. Nothing moves.',[['Check','arms']]],
+ ['cameras','Cameras','Top camera plus the two wrist cameras.',[['Capture','cameras']]],
+ ['router','Router connection','The Colosseum server that assigns policies and stores results.',[['Check','router']]],
+ ['claude','Claude login','Needed only when Claude is one of the policies.',[['Check','claude']]],
+ ['server','Policy Server','Runs the policies on this computer.',[['Start','server'],['Stop','server_stop']]],
+];
+const REQUIRED=['can','arms','cameras','router','server'];
+const api=(p,b)=>fetch(p,b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(async r=>{const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||r.statusText);return j});
+function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),3500)}
+const ICON={ok:'✓',fail:'!',idle:'·',running:''};
+
+function show(v){view=v;document.querySelectorAll('.view').forEach(e=>e.classList.toggle('on',e.id=='v-'+v));
+  document.querySelectorAll('.steps button').forEach(b=>b.classList.toggle('on',b.dataset.v==v));
+  if(v=='review')loadEvals();
+  if(v=='record'){loadResumable();if(ST&&!ST.recording&&!ST.preview)togglePreview(true)}else if(ST&&!ST.recording&&ST.preview)togglePreview(false)}
+document.querySelectorAll('.steps button').forEach(b=>b.onclick=()=>show(b.dataset.v));
+
+// ---- setup ----
+$('#checks').innerHTML=CHECKS.map(([k,t,d,acts])=>`<div class="card check ${k=='cameras'?'wide':''}" id="c-${k}">
+  <div class="ico" id="i-${k}">·</div><div class="body"><div class="spread"><h2>${t}</h2></div>
+  <div class="detail" id="d-${k}">${d}</div>
+  ${k=='cameras'?'<div class="cams" id="camgrid"></div>':''}
+  <div class="acts">${acts.map(([l,a])=>`<button class="small" data-a="${a}">${l}</button>`).join('')}</div></div></div>`).join('');
+document.querySelectorAll('#checks [data-a]').forEach(b=>b.onclick=()=>api('/api/check/'+b.dataset.a,{}).catch(e=>toast(e.message)));
+$('#runall').onclick=()=>api('/api/check/all',{}).catch(e=>toast(e.message));
+$('#toRecord').onclick=()=>show('record');
+
+function renderChecks(){
+  for(const [k,,desc] of CHECKS){const c=ST.checks[k];const i=$('#i-'+k);i.className='ico '+c.status;i.textContent=ICON[c.status]??'·';
+    $('#d-'+k).textContent=c.detail||desc;}
+  const thumbs=ST.thumbs.join(),ok=ST.checks.cameras.status=='ok';
+  if($('#camgrid').dataset.k!==thumbs+ok){$('#camgrid').dataset.k=thumbs+ok;
+    $('#camgrid').innerHTML=(CFG.cameras||[]).map(c=>`<div class="cam">${ST.thumbs.includes(c)?`<img src="/api/thumb/${c}.jpg?${Date.now()}">`:'not captured'}
+      <span class="tag">${ST.thumbs.includes(c)?'<span class="tick">✓</span>':''}${{head_image:'Top',left_image:'Left wrist',right_image:'Right wrist'}[c]||c}</span></div>`).join('')}
+  const missing=REQUIRED.filter(k=>ST.checks[k].status!='ok');
+  $('#readymsg').innerHTML=missing.length?`Still needed: ${missing.map(k=>CHECKS.find(c=>c[0]==k)[1]).join(', ')}`:'<span style="color:var(--ok);font-weight:600">✓ All set. You can start recording.</span>';
+  document.querySelector('.steps [data-v=setup]').classList.toggle('done',!missing.length);
+  const s=ST.checks.server,p=$('#srvpill');p.className='pill '+s.status;p.querySelector('span:last-child').textContent='Policy Server: '+({ok:'running',running:'busy',fail:'stopped',idle:'stopped'}[s.status]);
+  $('#start').disabled=ST.recording;$('#start').title=missing.length?'Some setup checks are not green yet':'';
+}
+
+// ---- record ----
+function togglePreview(on){wantPreview=on;api('/api/preview/'+(on?'start':'stop'),{}).then(r=>{if(on&&!r.ok)toast('Camera busy, try again shortly')}).catch(()=>{})}
+$('#pvBtn').onclick=()=>togglePreview(true);
+async function loadResumable(){
+  const evs=await api('/api/evals').catch(()=>[]);
+  const sel=$('#resume'),cur=sel.value;
+  sel.innerHTML='<option value="">— start a new one —</option>'+evs.filter(e=>e.state=='interrupted').map(e=>`<option value="${e.id}">${esc(e.instruction)} · ${new Date(e.time*1000).toLocaleString()}</option>`).join('');sel.value=cur;
+  const pend=evs.filter(e=>e.state=='review'||e.state=='scored');
+  $('#pendingBanner').innerHTML=pend.length?`<div class="banner warn">⚠ <div><b>“${esc(pend[0].instruction)}” is recorded but not submitted.</b> Starting a new evaluation closes it on the Router. <a href="#" id="goPend">Score it first</a></div></div>`:'';
+  if(pend.length)$('#goPend').onclick=e=>{e.preventDefault();evSel=pend[0].id;show('review')};
+}
+$('#start').onclick=async()=>{
+  const missing=REQUIRED.filter(k=>ST.checks[k].status!='ok');
+  if(missing.length&&!confirm('Some setup checks are not green yet. Start anyway?'))return;
+  const body={instruction:$('#instruction').value,scene:$('#scene').value,evaluator:$('#evaluator').value,max_steps:$('#maxsteps').value,resume:$('#resume').value};
+  try{localStorage.setItem('evform',JSON.stringify({scene:body.scene,evaluator:body.evaluator}))}catch(e){}
+  try{await api('/api/eval/start',body)}catch(e){toast(e.message)}
+};
+$('#finishBtn').onclick=()=>api('/api/eval/finish',{}).then(()=>toast('Finishing after the current step…'));
+$('#toReview').onclick=()=>{evSel=ST.run.eval_id;api('/api/eval/reset',{});show('review')};
+$('#backForm').onclick=()=>api('/api/eval/reset',{});
+
+const PHASE={starting:'Starting',setup:'Waiting for you',prompt:'Waiting for you',loading:'Loading policy',running:'Running',homing:'Returning home',saving:'Saving',between:'Run finished',done:'Done',error:'Stopped'};
+function renderRun(){
+  const r=ST.run,active=ST.recording||['done','error'].includes(r.phase);
+  $('#rec-form').style.display=active?'none':'';$('#rec-run').style.display=active?'':'none';
+  if(!active)return;
+  if(view!='record'&&ST.recording&&r.phase=='prompt')show('record');
+  $('#runTask').textContent=r.instruction||'';
+  $('#sideChip').className='chip '+(r.side||'');$('#sideChip').textContent=r.side?'Policy '+r.side:'Preparing';
+  $('#phaseChip').innerHTML=(r.phase=='running'?'<span class="dot"></span>':'')+(PHASE[r.phase]||r.phase);
+  const pct=r.max_steps?Math.min(100,r.step/r.max_steps*100):0;
+  $('#progBar').style.width=(r.phase=='running'||r.phase=='homing'||r.phase=='saving'?pct:0)+'%';
+  $('#stepTxt').textContent=`Step ${r.step} / ${r.max_steps||'–'}`;$('#pctTxt').textContent=r.phase=='running'?Math.round(pct)+'%':'';
+  $('#lvEmpty').style.display=$('#lv').src&&r.phase=='running'?'none':'';
+  const idle=['error','done'].includes(r.phase);
+  $('#lvEmpty').innerHTML=r.phase=='running'?'':`<div>${idle?'':'<div class="ico running" style="margin:0 auto 12px;width:44px;height:44px"></div>'}${esc(r.message||PHASE[r.phase]||'')}</div>`;
+  const sides=['A','B'],cur=sides.indexOf(r.side),done=r.phase=='done',err=r.phase=='error';
+  $('#timeline').innerHTML=sides.map((s,i)=>{const st=done||i<cur||(i==cur&&r.phase=='between')?'ok':i==cur?(err?'fail':'running'):'idle';
+    return `<div class="tl ${i==cur&&!idle?'cur':''}"><div class="ico ${st}">${ICON[st]}</div><div><b>Policy ${s}</b><div class="mut" style="font-size:13px">${st=='ok'?'Recorded':st=='running'?PHASE[r.phase]:st=='fail'?'Stopped':'Waiting'}</div></div></div>`}).join('')
+    +`<div class="tl ${done?'cur':''}"><div class="ico ${done?'ok':'idle'}">${done?'✓':'·'}</div><div><b>Score both runs</b><div class="mut" style="font-size:13px">In Review</div></div></div>`;
+  const m=$('#runMsg');m.style.display=r.message?'':'none';m.className='banner '+(r.phase=='error'?'bad':r.phase=='done'?'ok':'info');m.textContent=r.message;
+  $('#finishBox').style.display=r.phase=='running'?'':'none';
+  $('#doneBox').style.display=done?'':'none';$('#errBox').style.display=r.phase=='error'&&!ST.recording?'':'none';
+  const lg=$('#log'),stick=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;lg.textContent=ST.log.join('\n');if(stick)lg.scrollTop=lg.scrollHeight;
+}
+function renderPrompt(){
+  const p=ST.prompt,m=$('#modal');
+  if(!p){m.classList.remove('on');lastPromptId=null;return}
+  if(p.id===lastPromptId)return;lastPromptId=p.id;
+  $('#mTitle').textContent=p.title;$('#mBody').textContent=p.body;$('#mInput').style.display=p.kind=='text'?'':'none';$('#mText').value='';
+  const acts={scene:[['Cancel evaluation','',null],['Start Policy '+(p.side||''),'primary','']],
+    confirm:[['Cancel','','n'],['Start robot','primary','y']],
+    text:[['Cancel','',null],['OK','primary','__text']],
+    recovery:[['Skip and release power','danger','skip'],['Retry return','primary','retry']]}[p.kind];
+  $('#mActs').innerHTML=acts.map(([l,c],i)=>`<button class="${c} big" data-i="${i}">${l}</button>`).join('');
+  $('#mActs').querySelectorAll('button').forEach(b=>b.onclick=()=>{let a=acts[b.dataset.i][2];
+    if(p.kind=='recovery'&&a=='skip'&&!confirm('Support both arms by hand first. Releasing power lets them drop. Continue?'))return;
+    if(p.kind=='scene'&&a===null&&!confirm('Cancel this evaluation? You can resume it later.'))return;
+    if(a=='__text')a=$('#mText').value;
+    api('/api/eval/reply',{kind:p.kind,answer:a});m.classList.remove('on')});
+  m.classList.add('on');if(p.kind!='recovery'&&view!='record')show('record');
+}
+
+// ---- review ----
+async function loadEvals(){
+  const evs=await api('/api/evals').catch(()=>[]);
+  if(!evSel&&evs.length)evSel=(evs.find(e=>e.state=='review')||evs[0]).id;
+  const L={review:'needs score',scored:'not submitted',submitted:'submitted',discarded:'discarded',superseded:'replaced',interrupted:'interrupted'};
+  $('#evlist').innerHTML=evs.map(e=>`<button class="evitem ${e.id==evSel?'on':''}" data-id="${e.id}"><div class="t">${esc(e.instruction)||'<i>no instruction</i>'}</div>
+    <div class="spread"><span class="mut" style="font-size:12px">${new Date(e.time*1000).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><span class="badge ${e.state}">${L[e.state]}</span></div></button>`).join('')||'<p class="mut" style="padding:10px">No evaluations yet.</p>';
+  $('#evlist').querySelectorAll('.evitem').forEach(b=>b.onclick=()=>{evSel=b.dataset.id;loadEvals()});
+  if(evSel)loadDetail(evSel);
+}
+$('#refresh').onclick=loadEvals;
+let pref='';
+async function loadDetail(id){
+  const d=await api('/api/evals/'+id).catch(e=>{toast(e.message)});if(!d)return;
+  const locked=['submitted','discarded','superseded'].includes(d.state)||d.busy, dis=locked?'disabled':'';pref=d.preference;
+  const names={head_image:'Top',left_image:'Left wrist',right_image:'Right wrist'};
+  const side=r=>{const v=c=>`<video data-side="${r.side}" src="/video/${id}/${r.id}/${c}" muted preload="metadata" playsinline ${c==='head_image'?'class="vmain"':''}></video>`;
+    return `<div class="card side"><div class="spread"><h2><span class="chip ${r.side}" style="font-size:13px">Policy ${r.side}</span></h2>
+    <div class="row" style="gap:6px"><button class="small" data-play="${r.side}">▶ Play</button><button class="small" data-pause="${r.side}">❚❚</button><button class="small" data-restart="${r.side}">⟲</button>
+    <select class="small" data-rate="${r.side}" style="width:auto;padding:5px 8px"><option>0.5</option><option selected>1</option><option>2</option><option>4</option></select></div></div>
+    <div style="margin-top:12px">${r.recorded?(r.cams.includes('head_image')?v('head_image'):'')+`<div class="vsmall">${r.cams.filter(c=>c!='head_image').map(c=>`<div>${v(c)}<div class="mut" style="font-size:12px">${names[c]}</div></div>`).join('')}</div>`:'<p class="mut">Not recorded.</p>'}</div>
+    <label>How much of the task did ${r.side} complete?</label>
+    <div class="score"><input type="range" min="0" max="100" step="5" id="rg-${r.side}" value="${r.score??0}" ${dis}><input class="num" type="number" min="0" max="100" id="sc-${r.side}" value="${r.score??''}" placeholder="–" ${dis}></div>
+    <div class="mut" style="font-size:12px;display:flex;justify-content:space-between"><span>0 · nothing</span><span>50 · halfway</span><span>100 · fully done</span></div></div>`};
+  const banner={submitted:'<div class="banner ok">✓ Submitted to the Router. It can no longer be changed here.</div>',discarded:'<div class="banner">Discarded. Nothing was published.</div>',
+    superseded:'<div class="banner">A newer evaluation replaced this one on the Router, so it can no longer be submitted.</div>',interrupted:'<div class="banner warn">This evaluation was interrupted before both runs were recorded. Continue it from Record → “Continue an interrupted evaluation”.</div>'}[d.state]||(d.busy?'<div class="banner info">Sending to the Router… this can take a few minutes while videos upload.</div>':'');
+  $('#evdetail').innerHTML=`<div class="card" style="margin-bottom:16px"><div class="mut" style="font-size:13px;text-transform:uppercase;letter-spacing:.04em;font-weight:600">Task</div>
+    <div style="font-size:20px;font-weight:700">${esc(d.instruction)}</div><div class="mut">Scene: ${esc(d.scene)||'–'} · <span style="font-family:monospace;font-size:12px">${id}</span></div></div>
+    ${banner}<div class="ab">${d.runs.map(side).join('')}</div>
+    <div class="card" style="margin-top:16px"><label style="margin-top:0">Which policy did better?</label>
+    <div class="seg">${[['A','A was better'],['tie','About the same'],['B','B was better']].map(([v,l])=>`<button data-pref="${v}" class="${pref==v?'on':''}" ${dis}>${l}</button>`).join('')}</div>
+    <label>Feedback <span style="text-transform:none;font-weight:400">(optional)</span></label><textarea id="fb" placeholder="What did each policy do well or badly?" ${dis}>${esc(d.feedback)}</textarea>
+    ${locked?'':`<div class="spread" style="margin-top:18px"><button class="ghost" id="discardBtn">Discard…</button>
+      <div class="row"><button id="saveBtn">Save draft</button><button class="primary big" id="submitBtn">Submit to Router</button></div></div>`}
+    ${d.log?`<details class="log"><summary>Router log</summary><pre>${esc(d.log)}</pre></details>`:''}</div>`;
+  const V=s=>document.querySelectorAll(`video[data-side="${s}"]`);
+  document.querySelectorAll('[data-play]').forEach(b=>b.onclick=()=>V(b.dataset.play).forEach(v=>v.play()));
+  document.querySelectorAll('[data-pause]').forEach(b=>b.onclick=()=>V(b.dataset.pause).forEach(v=>v.pause()));
+  document.querySelectorAll('[data-restart]').forEach(b=>b.onclick=()=>V(b.dataset.restart).forEach(v=>{v.currentTime=0;v.play()}));
+  document.querySelectorAll('[data-rate]').forEach(s=>s.onchange=()=>V(s.dataset.rate).forEach(v=>v.playbackRate=+s.value));
+  for(const r of d.runs){const rg=$('#rg-'+r.side),sc=$('#sc-'+r.side);if(!rg)continue;rg.oninput=()=>sc.value=rg.value;sc.oninput=()=>rg.value=sc.value}
+  document.querySelectorAll('[data-pref]').forEach(b=>b.onclick=()=>{pref=b.dataset.pref;document.querySelectorAll('[data-pref]').forEach(x=>x.classList.toggle('on',x==b))});
+  const body=action=>{const o={action,preference:pref,feedback:$('#fb').value};d.runs.forEach(r=>o['score_'+r.side]=$('#sc-'+r.side)?.value??'');return o};
+  if(!locked){
+    $('#saveBtn').onclick=()=>api('/api/evals/'+id,body('save')).then(r=>{toast(r.msg);loadEvals()}).catch(e=>toast(e.message));
+    $('#submitBtn').onclick=()=>{if(d.runs.some(r=>$('#sc-'+r.side).value==='')||!pref)return toast('Give both runs a score and choose which was better.');
+      if(!confirm('Submit to the Router? Scores, feedback, videos and the dataset become public and cannot be edited.'))return;
+      api('/api/evals/'+id,body('submit')).then(r=>{toast('Submitting… videos are uploading.');loadEvals();pollBusy(id)}).catch(e=>toast(e.message))};
+    $('#discardBtn').onclick=()=>{const reason=prompt('Why discard this evaluation? (required, nothing is published)');if(!reason)return;
+      api('/api/evals/'+id,{action:'discard',reason}).then(r=>{toast('Discarding…');pollBusy(id)}).catch(e=>toast(e.message))};
+  }
+}
+function pollBusy(id){const t=setInterval(async()=>{const d=await api('/api/evals/'+id).catch(()=>null);if(!d||!d.busy){clearInterval(t);if(view=='review'&&evSel==id)loadEvals();if(d)toast(d.state=='submitted'?'✓ Submitted':d.state=='discarded'?'Discarded':'Router step finished, see the log')}},3000)}
+
+// ---- live link ----
+let lastBlob=null;
+function connect(){
+  const ws=new WebSocket(`ws://${location.host}/ws`);ws.binaryType='blob';
+  ws.onmessage=m=>{
+    if(typeof m.data!=='string'){const u=URL.createObjectURL(m.data);const img=ST&&ST.recording?$('#lv'):$('#pv');img.src=u;if(lastBlob)URL.revokeObjectURL(lastBlob);lastBlob=u;
+      if(img.id=='pv')$('#pvEmpty').style.display='none';return}
+    const prev=ST;ST=JSON.parse(m.data);renderChecks();renderRun();renderPrompt();
+    if(!ST.preview&&!ST.recording){$('#pvEmpty').style.display='';}
+    if(prev&&prev.recording&&!ST.recording&&view=='record')loadResumable();
+  };
+  ws.onclose=()=>{toast('Lost connection to the station, reconnecting…');setTimeout(connect,1500)};
+}
+api('/api/config').then(c=>{CFG=c;$('#sub').textContent=`${c.robot.toUpperCase()} · ${c.institution}`;
+  let saved={};try{saved=JSON.parse(localStorage.getItem('evform')||'{}')}catch(e){}
+  $('#scene').value=saved.scene||c.scene||'';$('#evaluator').value=saved.evaluator||c.evaluator||'';$('#maxsteps').value=c.max_steps;connect()});
+show(['setup','record','review'].includes(location.hash.slice(1))?location.hash.slice(1):'setup');
+</script>
+</body>
+</html>

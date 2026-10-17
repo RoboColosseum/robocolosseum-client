@@ -84,6 +84,28 @@ the Policy Server's `local-policy-logs/`.
    claude auth login --claudeai
    ```
 
+## Eval Station (one window instead of steps 1–5)
+
+`scripts/eval_gui.py` runs the whole flow below from a single browser page. The page has three
+tabs: **Setup** (GPU, CAN, both arms, 3 cameras, Router, Claude login and the Policy Server, each
+with a green tick), **Record** (task form with a live top-camera view, then A and B with live
+frames and a step counter) and **Review** (the same scoring, Submit and Discard as `review_evals.py`).
+
+```bash
+cd ~/colosseum-client
+uv pip install --python .venv/bin/python -e '.[gui]'   # once
+.venv/bin/python scripts/eval_gui.py --config configs/robot.yam-eef-llm.yaml
+# open http://127.0.0.1:8770
+```
+
+- It loads `local/llm-keys.env` and `local/claude-account.env`, then starts the Policy Server
+  (`--server-dir`, `--server-config`). It also stops the Policy Server when you press Ctrl-C, which frees the GPU.
+- **Bring CAN up** asks for your password in a system pop-up. **Both arms respond** reads each
+  motor's registers without powering it.
+- **Finish this run now** ends a run early. The arms return to zero, as they do when you press Enter
+  in the terminal flow. A software button is not an emergency stop, so keep the physical stop within reach.
+- If the return to zero fails, the page asks you to retry, or to support the arms and release power.
+
 ## 0. Check I2RT in the Client environment
 
 ```bash
