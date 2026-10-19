@@ -21,7 +21,11 @@
 html{background:var(--bg)}
 body{margin:0;min-height:100vh;color:var(--fg);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:transparent}
 /* ambient background: a tiny canvas scaled up and blurred, plus film grain */
-#amb{position:fixed;inset:0;width:100vw;height:100vh;z-index:-2;filter:blur(26px) saturate(1.15);transform:scale(1.15)}
+#amb{position:fixed;inset:0;width:100vw;height:100vh;z-index:-3;filter:blur(26px) saturate(1.15);transform:scale(1.15)}
+/* a colosseum drawn at 112x56 px and scaled up unsmoothed: deliberately super low resolution */
+#col{position:fixed;left:50%;bottom:-3vh;width:min(1500px,115vw);aspect-ratio:2/1;transform:translateX(-50%);z-index:-2;
+  image-rendering:pixelated;opacity:.30;mix-blend-mode:multiply;pointer-events:none}
+@media (prefers-color-scheme:dark){#col{opacity:.20;mix-blend-mode:screen}}
 .grain{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.07;mix-blend-mode:overlay;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
 .glass,.card{background:var(--glass);-webkit-backdrop-filter:blur(18px) saturate(1.3);backdrop-filter:blur(18px) saturate(1.3);border:1px solid var(--edge);box-shadow:var(--shadow)}
@@ -161,7 +165,7 @@ pre{background:var(--glass2);border:1px solid var(--line);border-radius:12px;pad
 </style>
 </head>
 <body>
-<canvas id="amb" width="96" height="60"></canvas><div class="grain"></div>
+<canvas id="amb" width="96" height="60"></canvas><canvas id="col" width="112" height="56"></canvas><div class="grain"></div>
 <header><div class="bar">
   <div class="brand"><div class="logo">E</div><div><b>Eval Station</b><div class="mut" style="font-size:12px" id="sub"></div></div></div>
   <div class="pill glass" id="srvpill"><span class="d"></span><span>Policy Server</span></div>
@@ -284,15 +288,14 @@ const AMB=(()=>{
     stop:['#f3d8cf','#ee5340','#f08a5d','#f6b9a0'], done:['#e9eedb','#9fd7a2','#f2bf7d','#f7e2b9'],
     error:['#f1dcd5','#e7745f','#d9a27a','#f3cdb4'], review:['#f2e6d6','#f2c27f','#d99a72','#f7e3c5']};
   const hex=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));
-  let cur=MOODS.setup.map(hex), target=cur, mx=.5, my=.5, img=null, imgA=0, t0=performance.now();
-  addEventListener('pointermove',e=>{mx=e.clientX/innerWidth;my=e.clientY/innerHeight});
+  let cur=MOODS.setup.map(hex), target=cur, img=null, imgA=0, t0=performance.now();
   function draw(now){
     const t=(now-t0)/1000;
     cur=cur.map((c,i)=>c.map((v,j)=>v+(target[i][j]-v)*.04));
     const rgb=(c,a)=>`rgba(${c.map(Math.round)},${a})`;
     cx.globalAlpha=1;cx.fillStyle=dark?rgb(cur[0].map(v=>v*.13),1):rgb(cur[0],1);cx.fillRect(0,0,W,H);
     const lights=[[.22+.12*Math.sin(t*.13),.3+.15*Math.cos(t*.11),.55],[.78+.1*Math.cos(t*.09),.35+.18*Math.sin(t*.15),.5],[.5+.2*Math.sin(t*.07+1),.85+.1*Math.cos(t*.12),.6]];
-    lights.forEach(([x,y,r],i)=>{x+=(mx-.5)*.12*(i+1);y+=(my-.5)*.1*(i+1);
+    lights.forEach(([x,y,r],i)=>{
       const g=cx.createRadialGradient(x*W,y*H,0,x*W,y*H,r*W);g.addColorStop(0,rgb(cur[i+1],dark?.55:.9));g.addColorStop(1,rgb(cur[i+1],0));cx.fillStyle=g;cx.fillRect(0,0,W,H)});
     if(img&&imgA>.01){cx.globalAlpha=imgA*(dark?.5:.38);cx.drawImage(img,0,0,W,H)}
     if(!still)requestAnimationFrame(draw);
@@ -301,6 +304,20 @@ const AMB=(()=>{
   return {mood(m){target=(MOODS[m]||MOODS.setup).map(hex);if(still)requestAnimationFrame(draw)},
           frame(src){const im=new Image();im.onload=()=>{img=im};im.src=src},
           camera(on){imgA=on?1:0;if(!on)img=null}};
+})();
+(()=>{ // three tiers of arches, attic band, ruined left crown; rendered tiny on purpose
+  const ink=matchMedia('(prefers-color-scheme: dark)').matches?'#f3d2b0':'#6b3a1f';
+  let a='';
+  const arches=(y,h,from)=>{for(let x=22;x<=210;x+=14)if(x>=from)a+=`<path d="M${x} ${y+h}v-${h-5}a5 5 0 0 1 10 0v${h-5}z"/>`};
+  arches(80,16,0);arches(62,15,0);arches(45,14,78);
+  let win='';for(let x=112;x<=208;x+=12)win+=`<rect x="${x}" y="33" width="5" height="4"/>`;
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 120">
+    <path fill="${ink}" fill-opacity=".85" d="M16 104Q120 118 224 104V30H108V40H96L84 44H76L70 56H58L54 60H16Z"/>
+    <g fill="#000" fill-opacity=".55">${a}${win}</g>
+    <path d="M16 79H224M16 61H224M74 43H224" stroke="#000" stroke-opacity=".35" stroke-width="2"/>
+    <path d="M4 110H236" stroke="${ink}" stroke-width="3" stroke-opacity=".7"/></svg>`;
+  const im=new Image();im.onload=()=>{const c=$('#col').getContext('2d');c.drawImage(im,0,0,112,56)};
+  im.src='data:image/svg+xml,'+encodeURIComponent(svg);
 })();
 let ambT=0;
 function mood(){
