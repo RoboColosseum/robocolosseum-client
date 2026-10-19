@@ -4,31 +4,31 @@
   open http://127.0.0.1:8770
 
 Needs the gui extra (uv pip install --python .venv/bin/python -e '.[gui]').
-It starts and stops the local Policy Server itself, loads local/llm-keys.env and
-local/claude-account.env, and records with scripts/record_evals.py. Scoring and
+It starts and stops the local Policy Server itself, keeps the LLM API keys in local/llm-keys.env
+(set and verified from the Setup page), and records with scripts/record_evals.py. Scoring and
 Submit/Discard reuse scripts/review_evals.py. Bound to 127.0.0.1 only.
 """
 import argparse
 import asyncio
-import builtins
 import collections
 import contextlib
 import io
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import httpx
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -56,7 +56,8 @@ class State:
         self.lock = threading.Lock()
         self.version = 0
         self.checks = {k: {'status': 'idle', 'detail': ''} for k in
-                       ('gpu', 'can', 'arms', 'cameras', 'router', 'claude', 'server')}
+                       ('gpu', 'can', 'arms', 'cameras', 'router', 'keys', 'server')}
+        self.keys = []             # per-provider key status for the Setup page; never the keys themselves
         self.run = {'phase': 'idle', 'side': None, 'step': 0, 'max_steps': 0, 'eval_id': None, 'message': '',
                     'instruction': ''}
         self.prompt = None
@@ -308,19 +309,75 @@ def check_router():
         api.close()
 
 
-def check_claude():
-    S.set_check('claude', 'running', 'Checking the Claude login…')
+# provider -> (label, variable in the keys file)
+PROVIDERS = {'openai': ('OpenAI · GPT', 'OPENAI_API_KEY'), 'xai': ('xAI · Grok', 'XAI_API_KEY'),
+             'anthropic': ('Anthropic · Claude', 'ANTHROPIC_API_KEY')}
+KEYS = {}        # provider -> key, loaded from --llm-keys
+KEY_OK = set()   # providers whose key passed the last verification
+
+
+def masked(key):
+    return f'{key[:3]}…{key[-4:]}' if len(key) > 12 else '•' * len(key)
+
+
+def verify_key(provider, key):
+    """List models with the key: proves it is accepted without spending tokens. Returns (ok, message)."""
     try:
-        out = subprocess.run(['claude', 'auth', 'status', '--text'], capture_output=True, text=True,
-                             timeout=30, env={**os.environ, **CLAUDE_ENV})
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return S.set_check('claude', 'fail', f'claude CLI unavailable: {e}')
-    method = next((ln.split(':', 1)[1].strip() for ln in out.stdout.splitlines() if ln.startswith('Login method')), '')
-    if out.returncode or not method:
-        email = '"$CLAUDE_ACCOUNT_EMAIL"'
-        return S.set_check('claude', 'fail', 'Claude session expired. In a terminal run: '
-                           f'source local/claude-account.env && claude auth login --claudeai --email {email}')
-    S.set_check('claude', 'ok', method)
+        if provider == 'anthropic':
+            import anthropic
+            try:
+                anthropic.Anthropic(api_key=key, max_retries=1, timeout=20).models.list(limit=1)
+            except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
+                return False, 'rejected'
+            except anthropic.APIConnectionError:
+                return False, 'could not reach Anthropic'
+            except anthropic.APIStatusError as e:
+                return False, f'error {e.status_code}'
+            return True, 'works'
+        url = {'openai': 'https://api.openai.com/v1/models', 'xai': 'https://api.x.ai/v1/models'}[provider]
+        r = httpx.get(url, headers={'Authorization': f'Bearer {key}'}, timeout=20)
+    except httpx.HTTPError:
+        return False, 'could not reach the provider'
+    if r.status_code in (401, 403):
+        return False, 'rejected'
+    return (True, 'works') if r.is_success else (False, f'error {r.status_code}')
+
+
+def check_keys():
+    S.set_check('keys', 'running', 'Checking each API key with its provider…')
+    rows, problems = [], []
+    for provider, (label, _) in PROVIDERS.items():
+        key = KEYS.get(provider, '')
+        ok, msg = verify_key(provider, key) if key else (False, 'missing')
+        (KEY_OK.add if ok else KEY_OK.discard)(provider)
+        rows.append({'provider': provider, 'label': label, 'ok': ok, 'msg': msg, 'masked': masked(key) if key else ''})
+        if not ok:
+            problems.append(f'{label} key {msg}')
+    with S.lock:
+        S.keys = rows
+        S.touch()
+    if problems:
+        return S.set_check('keys', 'fail', 'Please check your keys: ' + '; '.join(problems) + '.')
+    S.set_check('keys', 'ok', 'All API keys work')
+
+
+def save_keys(new):
+    """Write changed keys to the keys file (owner-only), keeping any other lines in it."""
+    path = ARGS.llm_keys
+    names = {var for _, var in PROVIDERS.values()}
+    lines = [ln for ln in (path.read_text().splitlines() if path.exists() else [])
+             if not any(re.match(rf'\s*(export\s+)?{v}=', ln) for v in names)]
+    for provider, value in new.items():
+        if provider in PROVIDERS and isinstance(value, str) and value.strip():
+            KEYS[provider] = value.strip()
+    for provider, key in KEYS.items():
+        lines.append(f'export {PROVIDERS[provider][1]}={shlex.quote(key)}')
+        os.environ[PROVIDERS[provider][1]] = key
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+    os.chmod(path, 0o600)
 
 
 class PolicyServer:
@@ -357,7 +414,7 @@ class PolicyServer:
         self.log = self.log_path.open('ab')
         self.proc = subprocess.Popen(
             [shutil.which('uv') or 'uv', 'run', '--no-sync', 'colosseum-policy-local', '--config', str(ARGS.server_config)],
-            cwd=ARGS.server_dir, env={**os.environ, **CLAUDE_ENV}, stdout=self.log, stderr=subprocess.STDOUT,
+            cwd=ARGS.server_dir, env=os.environ, stdout=self.log, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, start_new_session=True)
         deadline = time.time() + 120
         while time.time() < deadline and self.proc.poll() is None and not port_open(CONFIG.policy_server_url):
@@ -388,7 +445,7 @@ SERVER = PolicyServer()
 
 
 def run_all_checks():
-    for step in (check_gpu, check_can, check_arms, check_cameras, check_router, check_claude, SERVER.start):
+    for step in (check_gpu, check_can, check_arms, check_cameras, check_router, check_keys, SERVER.start):
         step()
 
 
@@ -570,7 +627,8 @@ def record_thread(form):
     config = replace(CONFIG, track='open', instruction=form.get('instruction', '').strip(),
                      scene=form.get('scene', '').strip() or CONFIG.scene,
                      evaluator=form.get('evaluator', '').strip() or CONFIG.evaluator,
-                     max_trial_steps=int(form.get('max_steps') or CONFIG.max_trial_steps))
+                     max_trial_steps=int(form.get('max_steps') or CONFIG.max_trial_steps),
+                     llm_api_keys={p: KEYS[p] for p in KEY_OK if p in KEYS}, llm_account_logins={})
     resume = form.get('resume') or None
     S.set_run(phase='starting', side=None, step=0, max_steps=config.max_trial_steps, eval_id=resume,
               instruction=config.instruction, message='Asking the Router for two policies…')
@@ -676,13 +734,22 @@ def config_info():
 def run_check(name: str):
     actions = {'all': run_all_checks, 'gpu': check_gpu, 'free_gpu': free_gpu, 'can': check_can,
                'can_reset': lambda: check_can(reset=True), 'arms': check_arms, 'cameras': check_cameras,
-               'router': check_router, 'claude': check_claude, 'server': SERVER.start,
+               'router': check_router, 'keys': check_keys, 'server': SERVER.start,
                'server_stop': SERVER.stop}
     if name not in actions:
         raise HTTPException(404)
-    if recording() and name not in ('gpu', 'router', 'claude'):
+    if recording() and name not in ('gpu', 'router', 'keys'):
         raise HTTPException(409, 'An evaluation is running')
     threading.Thread(target=actions[name], daemon=True).start()
+    return {'ok': True}
+
+
+@app.post('/api/keys')
+def set_keys(body: dict):
+    if recording():
+        raise HTTPException(409, 'An evaluation is running')
+    save_keys(body)
+    threading.Thread(target=check_keys, daemon=True).start()
     return {'ok': True}
 
 
@@ -785,7 +852,7 @@ def act_eval(eid: str, body: dict):
         notes_path(eid).write_text(json.dumps({k: str(v) for k, v in body['notes'].items()}, ensure_ascii=False))
     form = {k: [str(v)] for k, v in body.items() if k.startswith('score_') or k in ('preference', 'feedback')}
     try:
-        msg = plain(rv.save(eid, form))
+        rv.save(eid, form)
     except ValueError as e:
         raise HTTPException(400, f'Not saved: {e}')
     if action == 'submit':
@@ -831,15 +898,25 @@ def generate_feedback(eid: str, body: dict):
         raise HTTPException(400, 'Write a few observations for each policy first')
     prompt = FEEDBACK_PROMPT.format(task=a.get('task', {}).get('instruction', ''), scene=a.get('scene', '') or '-',
                                     sides='\n'.join(sides), preference=body.get('preference') or 'not chosen')
+    if not KEYS.get('anthropic'):
+        raise HTTPException(400, 'Add an Anthropic API key on the Setup page to write feedback')
+    import anthropic
+    client = anthropic.Anthropic(api_key=KEYS['anthropic'], timeout=120)
     try:
-        out = subprocess.run(['claude', '-p', '--model', 'sonnet', '--output-format', 'text'], input=prompt,
-                             capture_output=True, text=True, timeout=180, cwd=tempfile.gettempdir(),
-                             env={**os.environ, **CLAUDE_ENV})
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise HTTPException(502, f'Feedback generation failed: {e}')
-    if out.returncode or not out.stdout.strip():
-        raise HTTPException(502, 'Feedback generation failed; check the Claude login on the Setup page')
-    return {'feedback': out.stdout.strip()}
+        response = client.beta.messages.create(
+            model='claude-opus-5-5', max_tokens=16000, output_config={'effort': 'low'},
+            betas=['server-side-fallback-2026-07-01'], fallbacks='default',
+            messages=[{'role': 'user', 'content': prompt}])
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
+        raise HTTPException(502, 'The Anthropic key was rejected; please check your keys on the Setup page')
+    except anthropic.APIConnectionError:
+        raise HTTPException(502, 'Could not reach Anthropic; check the internet connection')
+    except anthropic.APIStatusError as e:
+        raise HTTPException(502, f'Feedback generation failed ({e.status_code}); try again')
+    text = ''.join(b.text for b in response.content if b.type == 'text').strip()
+    if response.stop_reason == 'refusal' or not text:
+        raise HTTPException(502, 'No feedback was written; edit the observations and try again')
+    return {'feedback': text}
 
 
 @app.get('/video/{eid}/{run_id}/{cam}')
@@ -856,7 +933,7 @@ def video(eid: str, run_id: str, cam: str):
 def snapshot():
     with S.lock:
         return {'checks': S.checks, 'run': dict(S.run), 'prompt': S.prompt, 'log': list(S.log)[-200:],
-                'recording': recording(), 'thumbs': sorted(S.thumbs), 'preview': bool(PREVIEW.thread and PREVIEW.thread.is_alive())}
+                'recording': recording(), 'thumbs': sorted(S.thumbs), 'keys': S.keys, 'preview': bool(PREVIEW.thread and PREVIEW.thread.is_alive())}
 
 
 @app.websocket('/ws')
@@ -887,6 +964,7 @@ async def poll_server():
 @contextlib.asynccontextmanager
 async def lifespan(app):
     task = asyncio.get_running_loop().create_task(poll_server())
+    threading.Thread(target=check_keys, daemon=True).start()
     yield
     task.cancel()
     await asyncio.to_thread(shutdown)
@@ -904,19 +982,19 @@ def shutdown():
 
 
 def main():
-    global ARGS, CONFIG, CLAUDE_ENV
+    global ARGS, CONFIG
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--config', default=str(CLIENT / 'configs/robot.yam-eef-llm.yaml'))
     p.add_argument('--server-dir', type=Path, default=Path.home() / 'colosseum-policy-server')
     p.add_argument('--server-config', default='local/local-runtime-yam-agent-local.yaml',
                    help='Policy Server config, relative to --server-dir')
     p.add_argument('--llm-keys', type=Path, default=CLIENT / 'local/llm-keys.env')
-    p.add_argument('--claude-env', type=Path, default=CLIENT / 'local/claude-account.env')
     p.add_argument('--port', type=int, default=8770)
     ARGS = p.parse_args()
     CONFIG = RobotClientConfig.from_yaml(ARGS.config)
-    os.environ.update(source_env(ARGS.llm_keys))  # GPT/Grok keys travel with the eval request
-    CLAUDE_ENV = source_env(ARGS.claude_env)
+    env = source_env(ARGS.llm_keys)
+    KEYS.update({p: env[var] for p, (_, var) in PROVIDERS.items() if env.get(var)})
+    os.environ.update({PROVIDERS[p][1]: k for p, k in KEYS.items()})
     rv.CONFIG = Path(ARGS.config).resolve()
     rv.ROOT = (CLIENT / CONFIG.evaluation_dir).resolve()
     rv.CACHE = rv.ROOT.parent / 'eval_review_cache'

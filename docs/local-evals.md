@@ -87,9 +87,10 @@ the Policy Server's `local-policy-logs/`.
 ## Eval Station (one window instead of steps 1–5)
 
 `scripts/eval_gui.py` runs the whole flow below from a single browser page. The page has three
-tabs: **Setup** (GPU, CAN, both arms, 3 cameras, Router, Claude login and the Policy Server, each
+tabs: **Setup** (GPU, CAN, both arms, 3 cameras, Router, AI API keys and the Policy Server, each
 with a green tick), **Record** (task form with a live top-camera view, then A and B with live
-frames and a step counter) and **Review** (the same scoring, Submit and Discard as `review_evals.py`).
+frames, a step counter and a red STOP button) and **Review** (scores, preference, your observations
+turned into English feedback by Claude, then Submit or Discard as in `review_evals.py`).
 
 ```bash
 cd ~/colosseum-client
@@ -98,12 +99,18 @@ uv pip install --python .venv/bin/python -e '.[gui]'   # once
 # open http://127.0.0.1:8770
 ```
 
-- It loads `local/llm-keys.env` and `local/claude-account.env`, then starts the Policy Server
-  (`--server-dir`, `--server-config`). It also stops the Policy Server when you press Ctrl-C, which frees the GPU.
+- It starts the Policy Server (`--server-dir`, `--server-config`). It also stops it when you
+  press Ctrl-C, which frees the GPU.
+- **API keys…** saves the OpenAI, xAI and Anthropic keys to `local/llm-keys.env` (owner-only).
+  **Verify** checks each key with its provider, without spending tokens. The Router is offered
+  only the LLMs whose key works, so the station needs no Claude Code login. If a key fails, the card
+  turns red and names it.
 - **Bring CAN up** asks for your password in a system pop-up. **Both arms respond** reads each
   motor's registers without powering it.
-- **Finish this run now** ends a run early. The arms return to zero, as they do when you press Enter
-  in the terminal flow. A software button is not an emergency stop, so keep the physical stop within reach.
+- **STOP POLICY** (or Esc) ends the current run at once. Even an action already on its way is held
+  back. The run is kept up to that step, the arms return to zero, and the evaluation moves on to the next
+  policy. **Task done** ends a run the same way. A software button is not an emergency stop, so keep
+  the physical stop within reach.
 - If the return to zero fails, the page asks you to retry, or to support the arms and release power.
 
 ## 0. Check I2RT in the Client environment

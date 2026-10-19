@@ -157,6 +157,12 @@ pre{background:var(--glass2);border:1px solid var(--line);border-radius:12px;pad
 .gen label{margin:0}
 .shimmer{background:linear-gradient(90deg,var(--glass2) 25%,var(--acc2) 50%,var(--glass2) 75%);background-size:200% 100%;animation:sh 1.2s linear infinite}
 @keyframes sh{to{background-position:-200% 0}}
+.keyrows{display:grid;gap:6px;margin-top:10px}
+.keyrow{display:flex;gap:10px;align-items:center;font-size:14px;padding:6px 10px;border-radius:10px;background:var(--glass2)}
+.keyrow b,.keyrow .mut{white-space:nowrap}
+.keyrow .kdot{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:700;color:#fff;background:var(--ok)}
+.keyrow.bad .kdot{background:var(--bad)}.keyrow .kmsg{margin-left:auto;color:var(--mut)}.keyrow.bad .kmsg{color:var(--bad);font-weight:600}
+code{font:12px ui-monospace,monospace;background:var(--glass2);padding:1px 5px;border-radius:5px}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--fg);color:var(--bg);padding:12px 20px;border-radius:14px;box-shadow:var(--shadow);z-index:30;opacity:0;transition:.25s;pointer-events:none;max-width:90vw}
 .toast.on{opacity:1;transform:translateX(-50%)}
 .pill{font-size:13px;padding:5px 12px;border-radius:20px;display:flex;gap:8px;align-items:center;color:var(--mut)}
@@ -259,6 +265,12 @@ pre{background:var(--glass2);border:1px solid var(--line);border-radius:12px;pad
   <div id="mInput" style="display:none;margin-top:14px"><input id="mText"></div>
   <div class="acts" id="mActs"></div>
 </div></div>
+<div class="modal" id="keysModal"><div class="card">
+  <h2>AI API keys</h2>
+  <p class="mut" style="margin:0">Keys stay on this computer, in <code>local/llm-keys.env</code>. Leave a box empty to keep its saved key.</p>
+  <div id="keyInputs"></div>
+  <div class="acts"><button class="big" id="keysCancel">Cancel</button><button class="primary big" id="keysSave">Save and verify</button></div>
+</div></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -270,10 +282,10 @@ const CHECKS=[
  ['arms','Both arms respond','Every motor in the left and right arm answers. Nothing moves.',[['Check','arms']]],
  ['cameras','Cameras','Top camera plus the two wrist cameras.',[['Capture','cameras']]],
  ['router','Router connection','The Colosseum server that assigns policies and stores results.',[['Check','router']]],
- ['claude','Claude login','For Claude as a policy, and for writing feedback.',[['Check','claude']]],
+ ['keys','AI API keys','Keys for the GPT, Grok and Claude policies. Claude also writes the review feedback.',[['API keys…','__keys'],['Verify','keys']]],
  ['server','Policy Server','Runs the policies on this computer.',[['Start','server'],['Stop','server_stop']]],
 ];
-const REQUIRED=['can','arms','cameras','router','server'];
+const REQUIRED=['can','arms','cameras','router','keys','server'];
 const api=(p,b)=>fetch(p,b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(async r=>{const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||r.statusText);return j});
 function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),3500)}
 const ICON={ok:'✓',fail:'!',idle:'·',running:''};
@@ -338,9 +350,9 @@ document.querySelectorAll('.steps button').forEach(b=>b.onclick=()=>show(b.datas
 $('#checks').innerHTML=CHECKS.map(([k,t,d,acts])=>`<div class="card check ${k=='cameras'?'wide':''}" id="c-${k}">
   <div class="ico" id="i-${k}">·</div><div class="body"><h2>${t}</h2>
   <div class="detail" id="d-${k}">${d}</div>
-  ${k=='cameras'?'<div class="cams" id="camgrid"></div>':''}
+  ${k=='cameras'?'<div class="cams" id="camgrid"></div>':''}${k=='keys'?'<div class="keyrows" id="keyrows"></div>':''}
   <div class="acts">${acts.map(([l,a])=>`<button class="small" data-a="${a}">${l}</button>`).join('')}</div></div></div>`).join('');
-document.querySelectorAll('#checks [data-a]').forEach(b=>b.onclick=()=>api('/api/check/'+b.dataset.a,{}).catch(e=>toast(e.message)));
+document.querySelectorAll('#checks [data-a]').forEach(b=>b.onclick=()=>b.dataset.a=='__keys'?openKeys():api('/api/check/'+b.dataset.a,{}).catch(e=>toast(e.message)));
 $('#runall').onclick=()=>api('/api/check/all',{}).catch(e=>toast(e.message));
 $('#toRecord').onclick=()=>show('record');
 
@@ -351,12 +363,27 @@ function renderChecks(){
   if($('#camgrid').dataset.k!==thumbs+ok){$('#camgrid').dataset.k=thumbs+ok;
     $('#camgrid').innerHTML=(CFG.cameras||[]).map(c=>`<div class="cam">${ST.thumbs.includes(c)?`<img src="/api/thumb/${c}.jpg?${Date.now()}">`:'not captured'}
       <span class="tag">${ST.thumbs.includes(c)?'<span class="tick">✓</span>':''}${{head_image:'Top',left_image:'Left wrist',right_image:'Right wrist'}[c]||c}</span></div>`).join('')}
+  const kr=JSON.stringify(ST.keys||[]);
+  if($('#keyrows').dataset.k!==kr){$('#keyrows').dataset.k=kr;
+    $('#keyrows').innerHTML=(ST.keys||[]).map(k=>`<div class="keyrow ${k.ok?'ok':'bad'}"><span class="kdot">${k.ok?'✓':'!'}</span><b>${esc(k.label)}</b><span class="mut">${esc(k.masked||'')}</span><span class="kmsg">${esc(k.msg)}</span></div>`).join('')}
   const missing=REQUIRED.filter(k=>ST.checks[k].status!='ok');
   $('#readymsg').innerHTML=missing.length?`Still needed: ${missing.map(k=>CHECKS.find(c=>c[0]==k)[1]).join(', ')}`:'<span style="color:var(--ok);font-weight:600">✓ All set. You can start recording.</span>';
   document.querySelector('.steps [data-v=setup]').classList.toggle('done',!missing.length);
   const s=ST.checks.server,p=$('#srvpill');p.className='pill glass '+s.status;p.querySelector('span:last-child').textContent='Policy Server: '+({ok:'running',running:'busy',fail:'stopped',idle:'stopped'}[s.status]);
   $('#start').disabled=ST.recording;
 }
+
+function openKeys(){
+  const rows=ST&&ST.keys&&ST.keys.length?ST.keys:[{provider:'openai',label:'OpenAI · GPT'},{provider:'xai',label:'xAI · Grok'},{provider:'anthropic',label:'Anthropic · Claude'}];
+  $('#keyInputs').innerHTML=rows.map(k=>`<label for="key-${k.provider}">${esc(k.label)} ${k.masked?`<span style="text-transform:none;font-weight:400">· saved ${esc(k.masked)}${k.ok?' ✓':''}</span>`:''}</label>
+    <div class="row" style="flex-wrap:nowrap"><input id="key-${k.provider}" type="password" autocomplete="off" spellcheck="false" placeholder="${k.masked?'keep saved key':'paste key'}">
+    <button class="small" type="button" data-eye="${k.provider}">Show</button></div>`).join('');
+  document.querySelectorAll('[data-eye]').forEach(b=>b.onclick=()=>{const i=$('#key-'+b.dataset.eye);i.type=i.type=='password'?'text':'password';b.textContent=i.type=='password'?'Show':'Hide'});
+  $('#keysModal').classList.add('on');
+}
+$('#keysCancel').onclick=()=>$('#keysModal').classList.remove('on');
+$('#keysSave').onclick=()=>{const body={};document.querySelectorAll('#keyInputs input').forEach(i=>body[i.id.slice(4)]=i.value);
+  api('/api/keys',body).then(()=>{$('#keysModal').classList.remove('on');toast('Saved. Checking each key…')}).catch(e=>toast(e.message))};
 
 // ---- record ----
 function togglePreview(on){api('/api/preview/'+(on?'start':'stop'),{}).then(r=>{if(on&&!r.ok)toast('Camera busy, try again shortly')}).catch(()=>{})}
