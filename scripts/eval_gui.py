@@ -318,10 +318,6 @@ KEY_OK = set()   # providers whose key passed the last verification
 CLAUDE_LOGIN = [False]  # Claude runs on the Claude Code login (no Anthropic key saved) and it works
 
 
-def masked(key):
-    return f'{key[:3]}…{key[-4:]}' if len(key) > 12 else '•' * len(key)
-
-
 def verify_key(provider, key):
     """List models with the key: proves it is accepted without spending tokens. Returns (ok, message)."""
     try:
@@ -366,11 +362,11 @@ def check_keys():
         key = KEYS.get(provider, '')
         ok, msg = verify_key(provider, key) if key else (False, 'missing')
         (KEY_OK.add if ok else KEY_OK.discard)(provider)
-        shown = masked(key) if key else ''
+        shown = 'API key' if key else ''  # how it authenticates; no part of a key leaves this process
         if provider == 'anthropic' and not key:
             ok, msg = claude_login()
             CLAUDE_LOGIN[0], shown = ok, 'Claude Code login'
-        rows.append({'provider': provider, 'label': label, 'ok': ok, 'msg': msg, 'masked': shown})
+        rows.append({'provider': provider, 'label': label, 'ok': ok, 'msg': msg, 'source': shown})
         if not ok:
             problems.append(f'{label}: {msg}' if shown == 'Claude Code login' else f'{label} key {msg}')
     with S.lock:
