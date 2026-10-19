@@ -22,6 +22,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import replace
@@ -63,6 +64,7 @@ class State:
         self.frame = None          # latest top-camera RGB array
         self.frame_seq = 0
         self.thumbs = {}           # camera -> jpeg bytes from the camera check
+        self.last_obs = None       # latest robot observation, for holding the pose after Stop
 
     def touch(self):
         self.version += 1
@@ -439,7 +441,8 @@ class Prompts:
     def __init__(self):
         self.answer = None
         self.event = threading.Event()
-        self.finish_now = threading.Event()
+        self.finish_now = threading.Event()  # set by Stop / Task done; cleared when the next run starts
+        self.stop_reason = None
         self.recovery = None
         self.closing = False
 
@@ -485,7 +488,6 @@ class Prompts:
         return True
 
     def readline(self):
-        self.finish_now.clear()
         return '\n'
 
     def select(self, r, w, x, timeout=0):
@@ -517,6 +519,7 @@ def install_hooks():
 
     def observe(robot, step, phase):
         obs = read(robot, step, phase)
+        S.last_obs = obs
         if TOP in obs.images:
             S.push_frame(obs.images[TOP])
         S.run['step'] = step
@@ -524,14 +527,31 @@ def install_hooks():
         return obs
     ev.read_observation = observe
 
+    execute = ev.execute_robot_action_async
+
+    async def execute_unless_stopped(robot, action, step, robot_call, enabled=True):
+        """After Stop, hold the measured pose instead of sending the policy's action, even if an
+        inference was already in flight; the loop then ends at its next step check."""
+        if not PROMPTS.finish_now.is_set():
+            return await execute(robot, action, step, robot_call, enabled)
+        obs = S.last_obs
+        return np.r_[obs.joints[:6], obs.gripper[:1], obs.joints[6:], obs.gripper[1:]].astype(np.float32)
+    ev.execute_robot_action_async = execute_unless_stopped
+
     trial = ev.run_trial
 
-    async def run_trial(config, assignment, run, *a, **k):
+    async def run_trial(config, assignment, run, path, *a, **k):
+        PROMPTS.finish_now.clear()
+        PROMPTS.stop_reason = None
         S.set_run(side=run['side'], step=0, max_steps=assignment['task'].get('max_steps', config.max_trial_steps),
                   eval_id=assignment['id'], instruction=assignment['task'].get('instruction', ''))
         try:
-            return await trial(config, assignment, run, *a, **k)
+            return await trial(config, assignment, run, path, *a, **k)
         finally:
+            if PROMPTS.stop_reason:
+                path.mkdir(parents=True, exist_ok=True)
+                (path / 'operator-stop.json').write_text(json.dumps(
+                    {'reason': PROMPTS.stop_reason, 'step': S.run['step']}))
             S.set_run(phase='between', message=f"Policy {run['side']} finished.")
     ev.run_trial = run_trial
     ev.sys = PROMPTS_SYS
@@ -590,8 +610,27 @@ def eval_summary(path):
             'state': state, 'time': path.stat().st_mtime, 'busy': rv.busy(a['id'])}
 
 
+def notes_path(eid):
+    return rv.ROOT / eid / 'review-notes.json'
+
+
+def load_notes(eid):
+    try:
+        return json.loads(notes_path(eid).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def operator_stop(path):
+    try:
+        return json.loads((path / 'operator-stop.json').read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def eval_detail(eid):
     d = rv.load(eid)
+    notes = load_notes(eid)
     res = d.get('result', {})
     outcomes = res.get('outcomes') or d.get('outcomes', {})
     draft = d.get('draft', {})
@@ -599,6 +638,7 @@ def eval_detail(eid):
     return {**eval_summary(rv.ROOT / eid / 'manifest.json'),
             'runs': [{'id': r['id'], 'side': r['side'], 'recorded': r['recorded'],
                       'cams': [c for c in CAMS if (r['path'] / c).is_dir()],
+                      'stop': operator_stop(r['path']), 'notes': notes.get(r['side'], ''),
                       'score': None if outcomes.get(r['side'], {}).get('partial_success') is None
                       else round(outcomes[r['side']]['partial_success'] * 100)} for r in rv.runs(d)],
             'preference': res.get('preference') or draft.get('preference') or '',
@@ -694,8 +734,15 @@ def reply(body: dict):
 
 
 @app.post('/api/eval/finish')
-def finish_now():
+def finish_now(body: dict):
+    """End the current run now: 'stopped' (unsafe) or 'completed'. It is recorded up to this step,
+    the arms return to zero, and the evaluation continues with the next policy."""
+    if S.run['phase'] != 'running':
+        raise HTTPException(409, 'No policy is running')
+    PROMPTS.stop_reason = 'stopped' if body.get('reason') == 'stopped' else 'completed'
     PROMPTS.finish_now.set()
+    S.set_run(phase='stopping', message='Stopping the policy and returning the arms to zero…'
+              if PROMPTS.stop_reason == 'stopped' else 'Ending this run…')
     return {'ok': True}
 
 
@@ -734,6 +781,8 @@ def act_eval(eid: str, body: dict):
         if not reason:
             raise HTTPException(400, 'A reason is required to discard')
         return {'msg': plain(rv.router(eid, 'discard', reason))}
+    if isinstance(body.get('notes'), dict):
+        notes_path(eid).write_text(json.dumps({k: str(v) for k, v in body['notes'].items()}, ensure_ascii=False))
     form = {k: [str(v)] for k, v in body.items() if k.startswith('score_') or k in ('preference', 'feedback')}
     try:
         msg = plain(rv.save(eid, form))
@@ -745,6 +794,52 @@ def act_eval(eid: str, body: dict):
         return {'msg': plain(rv.router(eid, 'submit'))}
     return {'msg': 'Saved on this computer.' if 'result' in rv.load(eid) else
             'Draft saved. Both scores and a preference are needed to submit.'}
+
+
+FEEDBACK_PROMPT = """You write the evaluator feedback for a blind A/B comparison of two robot policies that
+attempted the same task. Turn the evaluator's own observations into clear, consistent feedback.
+
+Task: {task}
+Scene: {scene}
+{sides}
+Evaluator preference: {preference}
+
+Write in English (the observations may be in English or Chinese), as plain text in exactly this form:
+Policy A: <2-3 sentences: what it achieved, where and how it failed, anything unsafe>
+Policy B: <2-3 sentences, same>
+Overall: <1-2 sentences: which did better and the deciding difference>
+
+Rules: use only facts from the observations, scores and run endings; never invent details. Keep it
+consistent with the scores and the preference. Neutral, specific, no model names, no markdown, under 130 words."""
+
+
+@app.post('/api/evals/{eid}/generate')
+def generate_feedback(eid: str, body: dict):
+    d = rv.load(known(eid))
+    a = d['assignment']
+    sides = []
+    for r in rv.runs(d):
+        side = r['side']
+        stop = operator_stop(r['path'])
+        ending = ('stopped by the evaluator as unsafe at step {step}' if stop and stop['reason'] == 'stopped'
+                  else 'ended by the evaluator as done at step {step}' if stop else 'ran until it finished or hit the step limit')
+        score = str(body.get(f'score_{side}', '')).strip() or 'not given'
+        obs = str((body.get('notes') or {}).get(side, '')).strip() or '(no observations written)'
+        sides.append(f'Policy {side}: score {score}/100; run {ending.format(**(stop or {}))}.\n'
+                     f'Evaluator observations for {side}: {obs}')
+    if not any((body.get('notes') or {}).values()):
+        raise HTTPException(400, 'Write a few observations for each policy first')
+    prompt = FEEDBACK_PROMPT.format(task=a.get('task', {}).get('instruction', ''), scene=a.get('scene', '') or '-',
+                                    sides='\n'.join(sides), preference=body.get('preference') or 'not chosen')
+    try:
+        out = subprocess.run(['claude', '-p', '--model', 'sonnet', '--output-format', 'text'], input=prompt,
+                             capture_output=True, text=True, timeout=180, cwd=tempfile.gettempdir(),
+                             env={**os.environ, **CLAUDE_ENV})
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise HTTPException(502, f'Feedback generation failed: {e}')
+    if out.returncode or not out.stdout.strip():
+        raise HTTPException(502, 'Feedback generation failed; check the Claude login on the Setup page')
+    return {'feedback': out.stdout.strip()}
 
 
 @app.get('/video/{eid}/{run_id}/{cam}')

@@ -6,131 +6,166 @@
 <title>Eval Station</title>
 <style>
 :root{
-  --bg:#f4f5f7;--panel:#ffffff;--panel2:#f8f9fb;--fg:#15171c;--mut:#6a7180;--line:#e3e6eb;
-  --acc:#3b5bfd;--acc2:#e9edff;--ok:#12a150;--okbg:#e6f6ec;--bad:#d93a2b;--badbg:#fdecea;--warn:#c27803;--warnbg:#fff4de;
-  --shadow:0 1px 2px rgba(16,24,40,.05),0 4px 16px rgba(16,24,40,.06);--r:16px;
+  --bg:#f3e8dc;--glass:rgba(255,250,244,.62);--glass2:rgba(255,248,240,.5);--edge:rgba(255,255,255,.65);--line:rgba(120,80,50,.16);
+  --fg:#2b1f17;--mut:#7c6656;--acc:#b4532a;--acc2:rgba(180,83,42,.12);--ok:#2f8a4c;--okbg:rgba(47,138,76,.13);
+  --bad:#c9372c;--badbg:rgba(201,55,44,.12);--warn:#b26a00;--warnbg:rgba(214,140,20,.15);--info:#3d63c9;--infobg:rgba(61,99,201,.12);
+  --A:#4565d8;--B:#c2457f;--shadow:0 1px 2px rgba(60,30,10,.06),0 10px 30px rgba(60,30,10,.10);--r:18px;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
 }
 @media (prefers-color-scheme:dark){:root{
-  --bg:#0e1014;--panel:#171a21;--panel2:#1d2129;--fg:#eceef2;--mut:#9199a8;--line:#2a2f3a;
-  --acc:#7c93ff;--acc2:#232b4d;--ok:#3ccf7c;--okbg:#14301f;--bad:#ff6b5e;--badbg:#3a1a17;--warn:#f0b34a;--warnbg:#3a2c12;
-  --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 24px rgba(0,0,0,.35)}}
+  --bg:#17110d;--glass:rgba(34,26,21,.62);--glass2:rgba(40,31,25,.5);--edge:rgba(255,220,190,.10);--line:rgba(255,220,190,.12);
+  --fg:#f4e9df;--mut:#b5a191;--acc:#f08a5d;--acc2:rgba(240,138,93,.16);--ok:#5ccf86;--okbg:rgba(92,207,134,.14);
+  --bad:#ff6b5e;--badbg:rgba(255,107,94,.14);--warn:#f2b64e;--warnbg:rgba(242,182,78,.14);--info:#8aa6ff;--infobg:rgba(138,166,255,.14);
+  --A:#7d93ff;--B:#f07fb4;--shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px rgba(0,0,0,.35)}}
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
-button{font:inherit;cursor:pointer;border:0;border-radius:10px;padding:10px 18px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);transition:.15s}
-button:hover:not(:disabled){filter:brightness(.97);transform:translateY(-1px)}
+html{background:var(--bg)}
+body{margin:0;min-height:100vh;color:var(--fg);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:transparent}
+/* ambient background: a tiny canvas scaled up and blurred, plus film grain */
+#amb{position:fixed;inset:0;width:100vw;height:100vh;z-index:-2;filter:blur(26px) saturate(1.15);transform:scale(1.15)}
+.grain{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.07;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.glass,.card{background:var(--glass);-webkit-backdrop-filter:blur(18px) saturate(1.3);backdrop-filter:blur(18px) saturate(1.3);border:1px solid var(--edge);box-shadow:var(--shadow)}
+.card{border-radius:var(--r);padding:20px;transition:transform .2s,box-shadow .2s}
+button{font:inherit;cursor:pointer;border-radius:12px;padding:10px 18px;background:var(--glass2);color:var(--fg);border:1px solid var(--line);transition:transform .15s,filter .15s,background .2s}
+button:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.04)}
+button:active:not(:disabled){transform:translateY(0) scale(.98)}
 button:disabled{opacity:.45;cursor:not-allowed}
-button.primary{background:var(--acc);color:#fff;border-color:transparent;font-weight:600}
-button.big{padding:14px 28px;font-size:17px;border-radius:12px}
+button.primary{background:var(--acc);color:#fff;border-color:transparent;font-weight:600;box-shadow:0 6px 18px color-mix(in srgb,var(--acc) 35%,transparent)}
+button.big{padding:14px 28px;font-size:17px;border-radius:14px}
 button.danger{background:var(--bad);color:#fff;border-color:transparent}
-button.ghost{background:transparent}
-button.small{padding:6px 12px;font-size:13px;border-radius:8px}
-input,textarea,select{font:inherit;color:var(--fg);background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
+button.ghost{background:transparent;border-color:transparent}
+button.small{padding:6px 12px;font-size:13px;border-radius:9px}
+input,textarea,select{font:inherit;color:var(--fg);background:var(--glass2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;width:100%}
 input:focus,textarea:focus,select:focus{outline:2px solid var(--acc);outline-offset:0;border-color:transparent}
 textarea{resize:vertical;min-height:90px}
-label{display:block;font-weight:600;font-size:13px;margin:14px 0 6px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+label{display:block;font-weight:600;font-size:12px;margin:14px 0 6px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
 .mut{color:var(--mut)}
-header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
-.bar{max-width:1320px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:20px;flex-wrap:wrap}
-.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px}
-.brand .logo{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,var(--acc),#9b5cff);display:grid;place-items:center;color:#fff;font-size:16px}
-.steps{display:flex;gap:6px;margin-left:auto;background:var(--panel);padding:5px;border-radius:12px;border:1px solid var(--line)}
+.eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--acc)}
+header{position:sticky;top:0;z-index:5;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--bg) 45%,transparent);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px)}
+.bar{max-width:1320px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:12px}
+.brand .logo{width:38px;height:38px;border-radius:12px 12px 6px 6px;background:linear-gradient(160deg,var(--acc),#e7a35a);display:grid;place-items:center;color:#fff;font:600 19px var(--serif);box-shadow:0 4px 14px color-mix(in srgb,var(--acc) 40%,transparent)}
+.brand b{font:600 20px var(--serif);letter-spacing:.02em}
+.steps{display:flex;gap:4px;margin-left:auto;padding:5px;border-radius:14px}
 .steps button{border:0;background:transparent;padding:8px 16px;display:flex;align-items:center;gap:8px;color:var(--mut)}
 .steps button.on{background:var(--acc2);color:var(--acc);font-weight:600}
-.steps .n{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:var(--line);color:var(--fg)}
+.steps .n{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:var(--line);color:var(--fg);transition:.2s}
 .steps button.on .n{background:var(--acc);color:#fff}
 .steps button.done .n{background:var(--ok);color:#fff}
-main{max-width:1320px;margin:0 auto;padding:24px 20px 60px}
-.view{display:none}.view.on{display:block;animation:fade .25s}
-@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
-h1{font-size:28px;margin:0 0 4px;letter-spacing:-.02em}
+main{max-width:1320px;margin:0 auto;padding:28px 20px 70px}
+.view{display:none}.view.on{display:block;animation:rise .35s cubic-bezier(.2,.7,.2,1)}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.view.on{animation:none}}
+h1{font:500 40px/1.1 var(--serif);margin:6px 0 8px;letter-spacing:-.01em}
+h1 em{color:var(--acc)}
 h2{font-size:18px;margin:0}
-.lead{color:var(--mut);margin:0 0 22px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:20px}
+.lead{color:var(--mut);margin:0;max-width:640px}
 .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 .spread{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .grid{display:grid;gap:16px}
 .checks{grid-template-columns:repeat(auto-fill,minmax(360px,1fr))}
 .check{display:flex;gap:14px;align-items:flex-start}
+.check:hover{transform:translateY(-2px)}
 .check .body{flex:1;min-width:0}
 .check .detail{color:var(--mut);font-size:14px;margin-top:2px;word-break:break-word}
 .check .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
-.ico{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;font-size:20px;font-weight:700;background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
-.ico.ok{background:var(--okbg);color:var(--ok);border-color:transparent}
-.ico.fail{background:var(--badbg);color:var(--bad);border-color:transparent}
+.ico{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;font-size:19px;font-weight:700;background:var(--glass2);color:var(--mut);border:1px solid var(--line);transition:.25s}
+.ico.ok{background:var(--ok);color:#fff;border-color:transparent;box-shadow:0 0 0 6px var(--okbg);animation:pop .35s}
+.ico.fail{background:var(--bad);color:#fff;border-color:transparent;box-shadow:0 0 0 6px var(--badbg)}
 .ico.running{border:3px solid var(--acc2);border-top-color:var(--acc);animation:spin .8s linear infinite;font-size:0}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pop{0%{transform:scale(.6)}70%{transform:scale(1.12)}100%{transform:scale(1)}}
 .check.wide{grid-column:1/-1}
 .cams{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}
-.cam{position:relative;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:4/3;display:grid;place-items:center;color:#888;font-size:13px}
+.cam{position:relative;border-radius:14px;overflow:hidden;background:#000;aspect-ratio:4/3;display:grid;place-items:center;color:#998;font-size:13px}
 .cam img{width:100%;height:100%;object-fit:cover;display:block}
-.cam .tag{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;font-size:12px;padding:3px 8px;border-radius:20px;display:flex;gap:6px;align-items:center}
+.cam .tag{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.55);color:#fff;font-size:12px;padding:3px 9px;border-radius:20px;display:flex;gap:6px;align-items:center}
 .tick{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--ok);color:#fff;font-size:11px}
-.hero{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.hero{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:24px}
 .two{display:grid;grid-template-columns:minmax(320px,440px) 1fr;gap:20px;align-items:start}
-@media(max-width:960px){.two{grid-template-columns:1fr}.cams{grid-template-columns:1fr}}
-.live{position:relative;background:#000;border-radius:var(--r);overflow:hidden;aspect-ratio:4/3;box-shadow:var(--shadow)}
+@media(max-width:960px){.two{grid-template-columns:1fr!important}.cams{grid-template-columns:1fr}}
+.live{position:relative;background:#000;border-radius:var(--r);overflow:hidden;aspect-ratio:4/3;box-shadow:var(--shadow);transition:box-shadow .4s}
+.live.A{box-shadow:0 0 0 3px var(--A),var(--shadow)}.live.B{box-shadow:0 0 0 3px var(--B),var(--shadow)}
+.live.stopping{box-shadow:0 0 0 4px var(--bad),0 0 60px color-mix(in srgb,var(--bad) 45%,transparent)}
 .live img{width:100%;height:100%;object-fit:contain;display:block}
-.live .empty{position:absolute;inset:0;display:grid;place-items:center;color:#9aa;text-align:center;padding:20px}
+.live .empty{position:absolute;inset:0;display:grid;place-items:center;color:#bba;text-align:center;padding:20px}
 .overlay{position:absolute;left:0;right:0;padding:14px;display:flex;justify-content:space-between;align-items:center;gap:8px}
-.overlay.top{top:0;background:linear-gradient(rgba(0,0,0,.55),transparent)}
-.overlay.bot{bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.65));flex-direction:column;align-items:stretch}
-.chip{background:rgba(255,255,255,.14);backdrop-filter:blur(6px);color:#fff;padding:6px 12px;border-radius:30px;font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px}
-.chip.A{background:#3b5bfd}.chip.B{background:#d0439a}
-.dot{width:9px;height:9px;border-radius:50%;background:#ff4d4d;box-shadow:0 0 0 0 rgba(255,77,77,.7);animation:pulse 1.4s infinite}
-@keyframes pulse{70%{box-shadow:0 0 0 8px rgba(255,77,77,0)}100%{box-shadow:0 0 0 0 rgba(255,77,77,0)}}
+.overlay.top{top:0;background:linear-gradient(rgba(0,0,0,.5),transparent)}
+.overlay.bot{bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.6));flex-direction:column;align-items:stretch}
+.chip{background:rgba(255,255,255,.16);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);color:#fff;padding:6px 12px;border-radius:30px;font-weight:600;font-size:14px;display:inline-flex;align-items:center;gap:8px}
+.chip.A{background:var(--A)}.chip.B{background:var(--B)}
+.dot{width:9px;height:9px;border-radius:50%;background:#ff4d4d;animation:pulse 1.4s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,77,77,.7)}70%{box-shadow:0 0 0 8px rgba(255,77,77,0)}100%{box-shadow:0 0 0 0 rgba(255,77,77,0)}}
 .prog{height:8px;border-radius:8px;background:rgba(255,255,255,.2);overflow:hidden;margin-top:8px}
-.prog>div{height:100%;background:linear-gradient(90deg,#7c93ff,#b07cff);width:0;transition:width .3s}
+.prog>div{height:100%;background:linear-gradient(90deg,#f5b26b,#e8704a);width:0;transition:width .3s}
 .stepnums{color:#fff;font-variant-numeric:tabular-nums;font-size:14px;display:flex;justify-content:space-between}
 .timeline{display:grid;gap:10px;margin:16px 0}
-.tl{display:flex;gap:12px;align-items:center;padding:12px 14px;border-radius:12px;background:var(--panel2);border:1px solid var(--line)}
-.tl .ico{width:30px;height:30px;font-size:14px}
+.tl{display:flex;gap:12px;align-items:center;padding:12px 14px;border-radius:14px;background:var(--glass2);border:1px solid var(--line);transition:.25s}
+.tl .ico{width:30px;height:30px;font-size:14px;box-shadow:none}
 .tl.cur{border-color:var(--acc);background:var(--acc2)}
-.banner{border-radius:12px;padding:12px 16px;margin-bottom:16px;display:flex;gap:10px;align-items:flex-start}
+/* the kill switch */
+.kill{width:100%;padding:22px 18px;border-radius:18px;border:0;background:radial-gradient(120% 140% at 50% 0%,#ff5a4a,#c4231a);color:#fff;
+  font-weight:800;font-size:22px;letter-spacing:.08em;display:flex;flex-direction:column;align-items:center;gap:4px;
+  box-shadow:0 10px 30px rgba(200,35,26,.45),inset 0 1px 0 rgba(255,255,255,.35);animation:ring 2s infinite}
+.kill small{font-weight:500;font-size:12px;letter-spacing:.02em;opacity:.9}
+.kill:hover:not(:disabled){filter:brightness(1.08)}
+@keyframes ring{0%{box-shadow:0 10px 30px rgba(200,35,26,.45),0 0 0 0 rgba(255,80,60,.55)}70%{box-shadow:0 10px 30px rgba(200,35,26,.45),0 0 0 16px rgba(255,80,60,0)}100%{box-shadow:0 10px 30px rgba(200,35,26,.45),0 0 0 0 rgba(255,80,60,0)}}
+kbd{font:600 11px ui-monospace,monospace;border:1px solid rgba(255,255,255,.5);border-radius:5px;padding:1px 5px}
+.banner{border-radius:14px;padding:12px 16px;margin-bottom:16px;display:flex;gap:10px;align-items:flex-start}
 .banner.warn{background:var(--warnbg);color:var(--warn)}
 .banner.bad{background:var(--badbg);color:var(--bad)}
 .banner.ok{background:var(--okbg);color:var(--ok)}
-.banner.info{background:var(--acc2);color:var(--acc)}
+.banner.info{background:var(--infobg);color:var(--info)}
 details.log{margin-top:16px}
 details.log summary{cursor:pointer;color:var(--mut);font-size:14px}
-pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;max-height:280px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-word;margin:8px 0 0}
-.modal{position:fixed;inset:0;background:rgba(10,12,18,.55);backdrop-filter:blur(4px);display:none;place-items:center;z-index:20;padding:20px}
-.modal.on{display:grid;animation:fade .2s}
-.modal .card{max-width:520px;width:100%;padding:28px}
-.modal h2{font-size:22px;margin-bottom:8px}
+pre{background:var(--glass2);border:1px solid var(--line);border-radius:12px;padding:12px;max-height:280px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-word;margin:8px 0 0}
+.modal{position:fixed;inset:0;background:rgba(30,18,10,.45);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);display:none;place-items:center;z-index:20;padding:20px}
+.modal.on{display:grid;animation:rise .25s}
+.modal .card{max-width:540px;width:100%;padding:30px}
+.modal h2{font:500 26px var(--serif);margin-bottom:8px}
 .modal .acts{display:flex;gap:10px;justify-content:flex-end;margin-top:22px;flex-wrap:wrap}
-.revgrid{display:grid;grid-template-columns:300px 1fr;gap:20px;align-items:start}
+.revgrid{display:grid;grid-template-columns:310px 1fr;gap:20px;align-items:start}
 @media(max-width:960px){.revgrid{grid-template-columns:1fr}}
-.evlist{display:grid;gap:6px;max-height:75vh;overflow:auto;padding:8px}
-.evitem{text-align:left;padding:10px 12px;border-radius:10px;border:1px solid transparent;background:transparent;display:block;width:100%}
+.evlist{display:grid;gap:6px;max-height:76vh;overflow:auto;padding:8px}
+.evitem{text-align:left;padding:10px 12px 10px 14px;border-radius:12px;border:1px solid transparent;background:transparent;display:block;width:100%;position:relative;overflow:hidden}
+.evitem::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:4px;border-radius:4px;background:var(--st,var(--line))}
 .evitem.on{background:var(--acc2);border-color:var(--acc)}
 .evitem .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em}
-.badge.review{background:var(--warnbg);color:var(--warn)}.badge.scored{background:var(--acc2);color:var(--acc)}
-.badge.submitted{background:var(--okbg);color:var(--ok)}.badge.discarded,.badge.superseded,.badge.interrupted{background:var(--panel2);color:var(--mut)}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em;color:#fff;background:var(--st)}
+.st-review{--st:#d98b0b}.st-scored{--st:#3d63c9}.st-submitted{--st:#2f8a4c}.st-discarded{--st:#c9372c}.st-superseded{--st:#8c8178}.st-interrupted{--st:#c46a2a}
+.legend{display:flex;gap:10px;flex-wrap:wrap;padding:0 10px 6px;font-size:11px;color:var(--mut)}
+.legend span{display:inline-flex;align-items:center;gap:5px}.legend i{width:8px;height:8px;border-radius:50%;background:var(--st)}
 .ab{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:1100px){.ab{grid-template-columns:1fr}}
-.side h2{display:flex;align-items:center;gap:8px}
+.side{border-top:4px solid var(--sc)}
+.side.A{--sc:var(--A)}.side.B{--sc:var(--B)}
 .vmain{width:100%;border-radius:12px;background:#000;aspect-ratio:4/3;display:block}
 .vsmall{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
 .vsmall video{width:100%;border-radius:10px;background:#000;aspect-ratio:4/3}
 .score{display:flex;align-items:center;gap:14px;margin-top:6px}
-.score input[type=range]{flex:1;accent-color:var(--acc);padding:0;background:none;border:0}
+.score input[type=range]{flex:1;accent-color:var(--sc);padding:0;background:none;border:0}
 .score .num{width:84px;text-align:center;font-size:20px;font-weight:700}
 .seg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .seg button{padding:14px;font-weight:600}
 .seg button.on{background:var(--acc);color:#fff;border-color:transparent}
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:12px 20px;border-radius:12px;box-shadow:var(--shadow);z-index:30;opacity:0;transition:.25s;pointer-events:none;max-width:90vw}
-.toast.on{opacity:1}
-.pill{font-size:13px;padding:5px 12px;border-radius:20px;background:var(--panel);border:1px solid var(--line);display:flex;gap:8px;align-items:center;color:var(--mut)}
+.seg button[data-pref=A].on{background:var(--A)}.seg button[data-pref=B].on{background:var(--B)}
+.gen{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:18px 0 6px}
+.gen label{margin:0}
+.shimmer{background:linear-gradient(90deg,var(--glass2) 25%,var(--acc2) 50%,var(--glass2) 75%);background-size:200% 100%;animation:sh 1.2s linear infinite}
+@keyframes sh{to{background-position:-200% 0}}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--fg);color:var(--bg);padding:12px 20px;border-radius:14px;box-shadow:var(--shadow);z-index:30;opacity:0;transition:.25s;pointer-events:none;max-width:90vw}
+.toast.on{opacity:1;transform:translateX(-50%)}
+.pill{font-size:13px;padding:5px 12px;border-radius:20px;display:flex;gap:8px;align-items:center;color:var(--mut)}
 .pill .d{width:8px;height:8px;border-radius:50%;background:var(--mut)}
-.pill.ok .d{background:var(--ok)}.pill.fail .d{background:var(--bad)}.pill.running .d{background:var(--warn)}
+.pill.ok .d{background:var(--ok);box-shadow:0 0 0 4px var(--okbg)}.pill.fail .d{background:var(--bad)}.pill.running .d{background:var(--warn)}
 </style>
 </head>
 <body>
+<canvas id="amb" width="96" height="60"></canvas><div class="grain"></div>
 <header><div class="bar">
-  <div class="brand"><div class="logo">◆</div><div>Eval Station<div class="mut" style="font-size:12px;font-weight:500" id="sub"></div></div></div>
-  <div class="pill" id="srvpill"><span class="d"></span><span>Policy Server</span></div>
-  <nav class="steps">
+  <div class="brand"><div class="logo">E</div><div><b>Eval Station</b><div class="mut" style="font-size:12px" id="sub"></div></div></div>
+  <div class="pill glass" id="srvpill"><span class="d"></span><span>Policy Server</span></div>
+  <nav class="steps glass">
     <button data-v="setup"><span class="n">1</span>Setup</button>
     <button data-v="record"><span class="n">2</span>Record</button>
     <button data-v="review"><span class="n">3</span>Review</button>
@@ -141,8 +176,8 @@ pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;pad
 <!-- 1. SETUP -->
 <section class="view" id="v-setup">
   <div class="hero">
-    <div><h1>Get the robot ready</h1><p class="lead" style="margin:0">Run the checks once after switching the rig on. Everything should turn green.</p></div>
-    <div class="row"><button class="primary big" id="runall">Run all checks</button></div>
+    <div><div class="eyebrow">Step one · once per session</div><h1>Get the robot <em>ready</em>.</h1><p class="lead">Run the checks after switching the rig on. Everything should turn green.</p></div>
+    <button class="primary big" id="runall">Run all checks</button>
   </div>
   <div class="grid checks" id="checks"></div>
   <div class="spread" style="margin-top:24px">
@@ -154,11 +189,11 @@ pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;pad
 <!-- 2. RECORD -->
 <section class="view" id="v-record">
   <div id="rec-form">
-    <div class="hero"><div><h1>New evaluation</h1><p class="lead" style="margin:0">Describe the task. The Router picks two policies, A and B, and the robot tries the task once with each.</p></div></div>
+    <div class="hero"><div><div class="eyebrow">Step two · record</div><h1>Two policies. <em>One task.</em></h1><p class="lead">Describe the task. The Router picks two policies, A and B, and the robot tries the task once with each.</p></div></div>
     <div id="pendingBanner"></div>
     <div class="two">
       <div class="card">
-        <label for="instruction">Task for the robot</label>
+        <label for="instruction" style="margin-top:0">Task for the robot</label>
         <textarea id="instruction" placeholder="e.g. Pick up the red cup and place it on the plate"></textarea>
         <label for="scene">Scene / location</label>
         <input id="scene" placeholder="e.g. nus">
@@ -182,17 +217,20 @@ pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;pad
 
   <div id="rec-run" style="display:none">
     <div class="two" style="grid-template-columns:1fr minmax(300px,380px)">
-      <div class="live"><img id="lv" alt=""><div class="empty" id="lvEmpty"></div>
+      <div class="live" id="liveBox"><img id="lv" alt=""><div class="empty" id="lvEmpty"></div>
         <div class="overlay top"><span class="chip" id="sideChip">Policy</span><span class="chip" id="phaseChip"></span></div>
         <div class="overlay bot"><div class="stepnums"><span id="stepTxt">Step 0</span><span id="pctTxt"></span></div><div class="prog"><div id="progBar"></div></div></div>
       </div>
       <div class="card">
-        <div class="mut" style="font-size:13px;text-transform:uppercase;letter-spacing:.04em;font-weight:600">Task</div>
-        <div id="runTask" style="font-size:17px;font-weight:600;margin-top:4px"></div>
+        <div class="eyebrow">Task</div>
+        <div id="runTask" style="font:500 20px/1.3 var(--serif);margin-top:4px"></div>
         <div class="timeline" id="timeline"></div>
         <div id="runMsg" class="banner info" style="display:none"></div>
-        <div id="finishBox"><button class="big" id="finishBtn" style="width:100%">■ Finish this run now</button>
-        <p class="mut" style="font-size:13px">Ends the current run early. The arms return to zero and the recording is kept. For an emergency, use the physical stop button.</p></div>
+        <div id="killBox">
+          <button class="kill" id="killBtn">■ STOP POLICY<small>Keeps the recording so far · arms return to zero · then the next policy <kbd>Esc</kbd></small></button>
+          <button id="doneBtn" style="width:100%;margin-top:10px">✓ Task done, end this run</button>
+          <p class="mut" style="font-size:12px;margin:10px 0 0">This is a software stop. In an emergency, press the physical stop button.</p>
+        </div>
         <div id="doneBox" style="display:none"><button class="primary big" id="toReview" style="width:100%">Score this evaluation →</button></div>
         <div id="errBox" style="display:none"><button class="big" id="backForm" style="width:100%">Back to the form</button></div>
       </div>
@@ -204,7 +242,9 @@ pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;pad
 <!-- 3. REVIEW -->
 <section class="view" id="v-review">
   <div class="revgrid">
-    <div class="card" style="padding:8px"><div class="spread" style="padding:10px 10px 4px"><h2>Evaluations</h2><button class="small ghost" id="refresh">↻</button></div><div class="evlist" id="evlist"></div></div>
+    <div class="card" style="padding:8px"><div class="spread" style="padding:10px 10px 6px"><h2>Evaluations</h2><button class="small ghost" id="refresh" title="Refresh">↻</button></div>
+      <div class="legend"><span class="st-review"><i></i>needs score</span><span class="st-scored"><i></i>not submitted</span><span class="st-submitted"><i></i>submitted</span><span class="st-discarded"><i></i>discarded</span><span class="st-interrupted"><i></i>interrupted</span><span class="st-superseded"><i></i>replaced</span></div>
+      <div class="evlist" id="evlist"></div></div>
     <div id="evdetail"><div class="card mut">Pick an evaluation on the left.</div></div>
   </div>
 </section>
@@ -219,14 +259,14 @@ pre{background:var(--panel2);border:1px solid var(--line);border-radius:10px;pad
 
 <script>
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let ST=null, CFG={}, view='setup', evSel=null, lastPromptId=null, wantPreview=false;
+let ST=null, CFG={}, view='setup', evSel=null, lastPromptId=null;
 const CHECKS=[
  ['gpu','GPU is free','Nothing else is using the graphics card.',[['Check','gpu'],['Free GPU','free_gpu']]],
  ['can','Robot connection (CAN)','The cables from the computer to both arms.',[['Check','can'],['Bring CAN up','can_reset']]],
  ['arms','Both arms respond','Every motor in the left and right arm answers. Nothing moves.',[['Check','arms']]],
  ['cameras','Cameras','Top camera plus the two wrist cameras.',[['Capture','cameras']]],
  ['router','Router connection','The Colosseum server that assigns policies and stores results.',[['Check','router']]],
- ['claude','Claude login','Needed only when Claude is one of the policies.',[['Check','claude']]],
+ ['claude','Claude login','For Claude as a policy, and for writing feedback.',[['Check','claude']]],
  ['server','Policy Server','Runs the policies on this computer.',[['Start','server'],['Stop','server_stop']]],
 ];
 const REQUIRED=['can','arms','cameras','router','server'];
@@ -234,15 +274,52 @@ const api=(p,b)=>fetch(p,b===undefined?{}:{method:'POST',headers:{'Content-Type'
 function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),3500)}
 const ICON={ok:'✓',fail:'!',idle:'·',running:''};
 
+// ---- ambient background: low-res drifting warm light that follows the mood, the pointer and the camera ----
+const AMB=(()=>{
+  const cv=$('#amb'),cx=cv.getContext('2d'),W=cv.width,H=cv.height;
+  const dark=matchMedia('(prefers-color-scheme: dark)').matches, still=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const MOODS={ // base, then three lights
+    setup:['#f3e3d0','#f6b97c','#ef8f6d','#f9dcae'], record:['#f2e0cc','#f4a868','#e5785c','#fbe1b6'],
+    A:['#efe0d4','#f2a066','#6f86ee','#f6cfa2'], B:['#f1ded6','#f2a066','#e06aa6','#f6cfa2'],
+    stop:['#f3d8cf','#ee5340','#f08a5d','#f6b9a0'], done:['#e9eedb','#9fd7a2','#f2bf7d','#f7e2b9'],
+    error:['#f1dcd5','#e7745f','#d9a27a','#f3cdb4'], review:['#f2e6d6','#f2c27f','#d99a72','#f7e3c5']};
+  const hex=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));
+  let cur=MOODS.setup.map(hex), target=cur, mx=.5, my=.5, img=null, imgA=0, t0=performance.now();
+  addEventListener('pointermove',e=>{mx=e.clientX/innerWidth;my=e.clientY/innerHeight});
+  function draw(now){
+    const t=(now-t0)/1000;
+    cur=cur.map((c,i)=>c.map((v,j)=>v+(target[i][j]-v)*.04));
+    const rgb=(c,a)=>`rgba(${c.map(Math.round)},${a})`;
+    cx.globalAlpha=1;cx.fillStyle=dark?rgb(cur[0].map(v=>v*.13),1):rgb(cur[0],1);cx.fillRect(0,0,W,H);
+    const lights=[[.22+.12*Math.sin(t*.13),.3+.15*Math.cos(t*.11),.55],[.78+.1*Math.cos(t*.09),.35+.18*Math.sin(t*.15),.5],[.5+.2*Math.sin(t*.07+1),.85+.1*Math.cos(t*.12),.6]];
+    lights.forEach(([x,y,r],i)=>{x+=(mx-.5)*.12*(i+1);y+=(my-.5)*.1*(i+1);
+      const g=cx.createRadialGradient(x*W,y*H,0,x*W,y*H,r*W);g.addColorStop(0,rgb(cur[i+1],dark?.55:.9));g.addColorStop(1,rgb(cur[i+1],0));cx.fillStyle=g;cx.fillRect(0,0,W,H)});
+    if(img&&imgA>.01){cx.globalAlpha=imgA*(dark?.5:.38);cx.drawImage(img,0,0,W,H)}
+    if(!still)requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+  return {mood(m){target=(MOODS[m]||MOODS.setup).map(hex);if(still)requestAnimationFrame(draw)},
+          frame(src){const im=new Image();im.onload=()=>{img=im};im.src=src},
+          camera(on){imgA=on?1:0;if(!on)img=null}};
+})();
+let ambT=0;
+function mood(){
+  const r=ST&&ST.run, active=ST&&(ST.recording||['done','error'].includes(r.phase));
+  let m=view;
+  if(view=='record'&&active)m=r.phase=='stopping'?'stop':r.phase=='done'?'done':r.phase=='error'?'error':(r.side||'record');
+  AMB.mood(m);AMB.camera(view=='record'&&(ST&&(ST.preview||ST.recording)));
+}
+
 function show(v){view=v;document.querySelectorAll('.view').forEach(e=>e.classList.toggle('on',e.id=='v-'+v));
   document.querySelectorAll('.steps button').forEach(b=>b.classList.toggle('on',b.dataset.v==v));
   if(v=='review')loadEvals();
-  if(v=='record'){loadResumable();if(ST&&!ST.recording&&!ST.preview)togglePreview(true)}else if(ST&&!ST.recording&&ST.preview)togglePreview(false)}
+  if(v=='record'){loadResumable();if(ST&&!ST.recording&&!ST.preview)togglePreview(true)}else if(ST&&!ST.recording&&ST.preview)togglePreview(false);
+  mood()}
 document.querySelectorAll('.steps button').forEach(b=>b.onclick=()=>show(b.dataset.v));
 
 // ---- setup ----
 $('#checks').innerHTML=CHECKS.map(([k,t,d,acts])=>`<div class="card check ${k=='cameras'?'wide':''}" id="c-${k}">
-  <div class="ico" id="i-${k}">·</div><div class="body"><div class="spread"><h2>${t}</h2></div>
+  <div class="ico" id="i-${k}">·</div><div class="body"><h2>${t}</h2>
   <div class="detail" id="d-${k}">${d}</div>
   ${k=='cameras'?'<div class="cams" id="camgrid"></div>':''}
   <div class="acts">${acts.map(([l,a])=>`<button class="small" data-a="${a}">${l}</button>`).join('')}</div></div></div>`).join('');
@@ -251,7 +328,7 @@ $('#runall').onclick=()=>api('/api/check/all',{}).catch(e=>toast(e.message));
 $('#toRecord').onclick=()=>show('record');
 
 function renderChecks(){
-  for(const [k,,desc] of CHECKS){const c=ST.checks[k];const i=$('#i-'+k);i.className='ico '+c.status;i.textContent=ICON[c.status]??'·';
+  for(const [k,,desc] of CHECKS){const c=ST.checks[k];const i=$('#i-'+k);if(i.className!='ico '+c.status){i.className='ico '+c.status;i.textContent=ICON[c.status]??'·'}
     $('#d-'+k).textContent=c.detail||desc;}
   const thumbs=ST.thumbs.join(),ok=ST.checks.cameras.status=='ok';
   if($('#camgrid').dataset.k!==thumbs+ok){$('#camgrid').dataset.k=thumbs+ok;
@@ -260,19 +337,19 @@ function renderChecks(){
   const missing=REQUIRED.filter(k=>ST.checks[k].status!='ok');
   $('#readymsg').innerHTML=missing.length?`Still needed: ${missing.map(k=>CHECKS.find(c=>c[0]==k)[1]).join(', ')}`:'<span style="color:var(--ok);font-weight:600">✓ All set. You can start recording.</span>';
   document.querySelector('.steps [data-v=setup]').classList.toggle('done',!missing.length);
-  const s=ST.checks.server,p=$('#srvpill');p.className='pill '+s.status;p.querySelector('span:last-child').textContent='Policy Server: '+({ok:'running',running:'busy',fail:'stopped',idle:'stopped'}[s.status]);
-  $('#start').disabled=ST.recording;$('#start').title=missing.length?'Some setup checks are not green yet':'';
+  const s=ST.checks.server,p=$('#srvpill');p.className='pill glass '+s.status;p.querySelector('span:last-child').textContent='Policy Server: '+({ok:'running',running:'busy',fail:'stopped',idle:'stopped'}[s.status]);
+  $('#start').disabled=ST.recording;
 }
 
 // ---- record ----
-function togglePreview(on){wantPreview=on;api('/api/preview/'+(on?'start':'stop'),{}).then(r=>{if(on&&!r.ok)toast('Camera busy, try again shortly')}).catch(()=>{})}
+function togglePreview(on){api('/api/preview/'+(on?'start':'stop'),{}).then(r=>{if(on&&!r.ok)toast('Camera busy, try again shortly')}).catch(()=>{})}
 $('#pvBtn').onclick=()=>togglePreview(true);
 async function loadResumable(){
   const evs=await api('/api/evals').catch(()=>[]);
   const sel=$('#resume'),cur=sel.value;
   sel.innerHTML='<option value="">— start a new one —</option>'+evs.filter(e=>e.state=='interrupted').map(e=>`<option value="${e.id}">${esc(e.instruction)} · ${new Date(e.time*1000).toLocaleString()}</option>`).join('');sel.value=cur;
   const pend=evs.filter(e=>e.state=='review'||e.state=='scored');
-  $('#pendingBanner').innerHTML=pend.length?`<div class="banner warn">⚠ <div><b>“${esc(pend[0].instruction)}” is recorded but not submitted.</b> Starting a new evaluation closes it on the Router. <a href="#" id="goPend">Score it first</a></div></div>`:'';
+  $('#pendingBanner').innerHTML=pend.length?`<div class="banner warn">⚠ <div><b>“${esc(pend[0].instruction)}” is recorded but not submitted.</b> Starting a new evaluation closes it on the Router. <a href="#" id="goPend" style="color:inherit">Score it first</a></div></div>`:'';
   if(pend.length)$('#goPend').onclick=e=>{e.preventDefault();evSel=pend[0].id;show('review')};
 }
 $('#start').onclick=async()=>{
@@ -282,32 +359,37 @@ $('#start').onclick=async()=>{
   try{localStorage.setItem('evform',JSON.stringify({scene:body.scene,evaluator:body.evaluator}))}catch(e){}
   try{await api('/api/eval/start',body)}catch(e){toast(e.message)}
 };
-$('#finishBtn').onclick=()=>api('/api/eval/finish',{}).then(()=>toast('Finishing after the current step…'));
+const stopRun=reason=>api('/api/eval/finish',{reason}).catch(e=>toast(e.message));
+$('#killBtn').onclick=()=>stopRun('stopped');
+$('#doneBtn').onclick=()=>stopRun('completed');
+addEventListener('keydown',e=>{if(e.key=='Escape'&&ST&&ST.run.phase=='running'&&!$('#modal').classList.contains('on')){e.preventDefault();stopRun('stopped')}});
 $('#toReview').onclick=()=>{evSel=ST.run.eval_id;api('/api/eval/reset',{});show('review')};
 $('#backForm').onclick=()=>api('/api/eval/reset',{});
 
-const PHASE={starting:'Starting',setup:'Waiting for you',prompt:'Waiting for you',loading:'Loading policy',running:'Running',homing:'Returning home',saving:'Saving',between:'Run finished',done:'Done',error:'Stopped'};
+const PHASE={starting:'Starting',setup:'Waiting for you',prompt:'Waiting for you',loading:'Loading policy',running:'Running',stopping:'Stopping',homing:'Returning home',saving:'Saving',between:'Run finished',done:'Done',error:'Stopped'};
 function renderRun(){
   const r=ST.run,active=ST.recording||['done','error'].includes(r.phase);
   $('#rec-form').style.display=active?'none':'';$('#rec-run').style.display=active?'':'none';
   if(!active)return;
   if(view!='record'&&ST.recording&&r.phase=='prompt')show('record');
   $('#runTask').textContent=r.instruction||'';
+  $('#liveBox').className='live '+(r.phase=='stopping'?'stopping':r.side||'');
   $('#sideChip').className='chip '+(r.side||'');$('#sideChip').textContent=r.side?'Policy '+r.side:'Preparing';
   $('#phaseChip').innerHTML=(r.phase=='running'?'<span class="dot"></span>':'')+(PHASE[r.phase]||r.phase);
   const pct=r.max_steps?Math.min(100,r.step/r.max_steps*100):0;
-  $('#progBar').style.width=(r.phase=='running'||r.phase=='homing'||r.phase=='saving'?pct:0)+'%';
+  $('#progBar').style.width=(['running','stopping','homing','saving'].includes(r.phase)?pct:0)+'%';
   $('#stepTxt').textContent=`Step ${r.step} / ${r.max_steps||'–'}`;$('#pctTxt').textContent=r.phase=='running'?Math.round(pct)+'%':'';
-  $('#lvEmpty').style.display=$('#lv').src&&r.phase=='running'?'none':'';
+  const showFrame=['running','stopping'].includes(r.phase);
+  $('#lvEmpty').style.display=$('#lv').src&&showFrame?'none':'';
   const idle=['error','done'].includes(r.phase);
-  $('#lvEmpty').innerHTML=r.phase=='running'?'':`<div>${idle?'':'<div class="ico running" style="margin:0 auto 12px;width:44px;height:44px"></div>'}${esc(r.message||PHASE[r.phase]||'')}</div>`;
+  $('#lvEmpty').innerHTML=showFrame?'':`<div>${idle?'':'<div class="ico running" style="margin:0 auto 12px;width:44px;height:44px"></div>'}${esc(r.message||PHASE[r.phase]||'')}</div>`;
   const sides=['A','B'],cur=sides.indexOf(r.side),done=r.phase=='done',err=r.phase=='error';
   $('#timeline').innerHTML=sides.map((s,i)=>{const st=done||i<cur||(i==cur&&r.phase=='between')?'ok':i==cur?(err?'fail':'running'):'idle';
     return `<div class="tl ${i==cur&&!idle?'cur':''}"><div class="ico ${st}">${ICON[st]}</div><div><b>Policy ${s}</b><div class="mut" style="font-size:13px">${st=='ok'?'Recorded':st=='running'?PHASE[r.phase]:st=='fail'?'Stopped':'Waiting'}</div></div></div>`}).join('')
     +`<div class="tl ${done?'cur':''}"><div class="ico ${done?'ok':'idle'}">${done?'✓':'·'}</div><div><b>Score both runs</b><div class="mut" style="font-size:13px">In Review</div></div></div>`;
-  const m=$('#runMsg');m.style.display=r.message?'':'none';m.className='banner '+(r.phase=='error'?'bad':r.phase=='done'?'ok':'info');m.textContent=r.message;
-  $('#finishBox').style.display=r.phase=='running'?'':'none';
-  $('#doneBox').style.display=done?'':'none';$('#errBox').style.display=r.phase=='error'&&!ST.recording?'':'none';
+  const m=$('#runMsg');m.style.display=r.message?'':'none';m.className='banner '+(err||r.phase=='stopping'?'bad':done?'ok':'info');m.textContent=r.message;
+  $('#killBox').style.display=r.phase=='running'?'':'none';
+  $('#doneBox').style.display=done?'':'none';$('#errBox').style.display=err&&!ST.recording?'':'none';
   const lg=$('#log'),stick=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;lg.textContent=ST.log.join('\n');if(stick)lg.scrollTop=lg.scrollHeight;
 }
 function renderPrompt(){
@@ -329,12 +411,12 @@ function renderPrompt(){
 }
 
 // ---- review ----
+const LBL={review:'needs score',scored:'not submitted',submitted:'submitted',discarded:'discarded',superseded:'replaced',interrupted:'interrupted'};
 async function loadEvals(){
   const evs=await api('/api/evals').catch(()=>[]);
   if(!evSel&&evs.length)evSel=(evs.find(e=>e.state=='review')||evs[0]).id;
-  const L={review:'needs score',scored:'not submitted',submitted:'submitted',discarded:'discarded',superseded:'replaced',interrupted:'interrupted'};
-  $('#evlist').innerHTML=evs.map(e=>`<button class="evitem ${e.id==evSel?'on':''}" data-id="${e.id}"><div class="t">${esc(e.instruction)||'<i>no instruction</i>'}</div>
-    <div class="spread"><span class="mut" style="font-size:12px">${new Date(e.time*1000).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><span class="badge ${e.state}">${L[e.state]}</span></div></button>`).join('')||'<p class="mut" style="padding:10px">No evaluations yet.</p>';
+  $('#evlist').innerHTML=evs.map(e=>`<button class="evitem st-${e.state} ${e.id==evSel?'on':''}" data-id="${e.id}"><div class="t">${esc(e.instruction)||'<i>no instruction</i>'}</div>
+    <div class="spread"><span class="mut" style="font-size:12px">${new Date(e.time*1000).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><span class="badge">${LBL[e.state]}</span></div></button>`).join('')||'<p class="mut" style="padding:10px">No evaluations yet.</p>';
   $('#evlist').querySelectorAll('.evitem').forEach(b=>b.onclick=()=>{evSel=b.dataset.id;loadEvals()});
   if(evSel)loadDetail(evSel);
 }
@@ -344,22 +426,29 @@ async function loadDetail(id){
   const d=await api('/api/evals/'+id).catch(e=>{toast(e.message)});if(!d)return;
   const locked=['submitted','discarded','superseded'].includes(d.state)||d.busy, dis=locked?'disabled':'';pref=d.preference;
   const names={head_image:'Top',left_image:'Left wrist',right_image:'Right wrist'};
+  const stopNote=s=>!s?'':s.reason=='stopped'?`<div class="banner bad" style="margin:12px 0 0">■ Stopped by the evaluator at step ${s.step}. Recorded up to that step.</div>`
+    :`<div class="banner info" style="margin:12px 0 0">✓ Ended by the evaluator as done at step ${s.step}.</div>`;
   const side=r=>{const v=c=>`<video data-side="${r.side}" src="/video/${id}/${r.id}/${c}" muted preload="metadata" playsinline ${c==='head_image'?'class="vmain"':''}></video>`;
-    return `<div class="card side"><div class="spread"><h2><span class="chip ${r.side}" style="font-size:13px">Policy ${r.side}</span></h2>
+    return `<div class="card side ${r.side}"><div class="spread"><span class="chip ${r.side}" style="font-size:13px">Policy ${r.side}</span>
     <div class="row" style="gap:6px"><button class="small" data-play="${r.side}">▶ Play</button><button class="small" data-pause="${r.side}">❚❚</button><button class="small" data-restart="${r.side}">⟲</button>
-    <select class="small" data-rate="${r.side}" style="width:auto;padding:5px 8px"><option>0.5</option><option selected>1</option><option>2</option><option>4</option></select></div></div>
+    <select data-rate="${r.side}" style="width:auto;padding:5px 8px"><option>0.5</option><option selected>1</option><option>2</option><option>4</option></select></div></div>
+    ${stopNote(r.stop)}
     <div style="margin-top:12px">${r.recorded?(r.cams.includes('head_image')?v('head_image'):'')+`<div class="vsmall">${r.cams.filter(c=>c!='head_image').map(c=>`<div>${v(c)}<div class="mut" style="font-size:12px">${names[c]}</div></div>`).join('')}</div>`:'<p class="mut">Not recorded.</p>'}</div>
+    <label>What did ${r.side} do? <span style="text-transform:none;font-weight:400">English or 中文</span></label>
+    <textarea id="ob-${r.side}" placeholder="Your observations: what it got right, where it failed, anything unsafe…" ${dis}>${esc(r.notes)}</textarea>
     <label>How much of the task did ${r.side} complete?</label>
     <div class="score"><input type="range" min="0" max="100" step="5" id="rg-${r.side}" value="${r.score??0}" ${dis}><input class="num" type="number" min="0" max="100" id="sc-${r.side}" value="${r.score??''}" placeholder="–" ${dis}></div>
     <div class="mut" style="font-size:12px;display:flex;justify-content:space-between"><span>0 · nothing</span><span>50 · halfway</span><span>100 · fully done</span></div></div>`};
-  const banner={submitted:'<div class="banner ok">✓ Submitted to the Router. It can no longer be changed here.</div>',discarded:'<div class="banner">Discarded. Nothing was published.</div>',
+  const banner={submitted:'<div class="banner ok">✓ Submitted to the Router. It can no longer be changed here.</div>',discarded:'<div class="banner bad">Discarded. Nothing was published.</div>',
     superseded:'<div class="banner">A newer evaluation replaced this one on the Router, so it can no longer be submitted.</div>',interrupted:'<div class="banner warn">This evaluation was interrupted before both runs were recorded. Continue it from Record → “Continue an interrupted evaluation”.</div>'}[d.state]||(d.busy?'<div class="banner info">Sending to the Router… this can take a few minutes while videos upload.</div>':'');
-  $('#evdetail').innerHTML=`<div class="card" style="margin-bottom:16px"><div class="mut" style="font-size:13px;text-transform:uppercase;letter-spacing:.04em;font-weight:600">Task</div>
-    <div style="font-size:20px;font-weight:700">${esc(d.instruction)}</div><div class="mut">Scene: ${esc(d.scene)||'–'} · <span style="font-family:monospace;font-size:12px">${id}</span></div></div>
+  $('#evdetail').innerHTML=`<div class="card" style="margin-bottom:16px"><div class="spread"><div class="eyebrow">Task</div><span class="badge st-${d.state}">${LBL[d.state]}</span></div>
+    <div style="font:500 24px/1.25 var(--serif);margin-top:4px">${esc(d.instruction)}</div><div class="mut">Scene: ${esc(d.scene)||'–'} · <span style="font-family:ui-monospace,monospace;font-size:12px">${id}</span></div></div>
     ${banner}<div class="ab">${d.runs.map(side).join('')}</div>
     <div class="card" style="margin-top:16px"><label style="margin-top:0">Which policy did better?</label>
     <div class="seg">${[['A','A was better'],['tie','About the same'],['B','B was better']].map(([v,l])=>`<button data-pref="${v}" class="${pref==v?'on':''}" ${dis}>${l}</button>`).join('')}</div>
-    <label>Feedback <span style="text-transform:none;font-weight:400">(optional)</span></label><textarea id="fb" placeholder="What did each policy do well or badly?" ${dis}>${esc(d.feedback)}</textarea>
+    <div class="gen"><label>Overall feedback <span style="text-transform:none;font-weight:400">· English, sent to the Router</span></label>
+      ${locked?'':'<button class="small primary" id="genBtn">✨ Write from my observations</button>'}</div>
+    <textarea id="fb" style="min-height:150px" placeholder="Write your observations for A and B above, then click “Write from my observations”. You can edit the result." ${dis}>${esc(d.feedback)}</textarea>
     ${locked?'':`<div class="spread" style="margin-top:18px"><button class="ghost" id="discardBtn">Discard…</button>
       <div class="row"><button id="saveBtn">Save draft</button><button class="primary big" id="submitBtn">Submit to Router</button></div></div>`}
     ${d.log?`<details class="log"><summary>Router log</summary><pre>${esc(d.log)}</pre></details>`:''}</div>`;
@@ -370,15 +459,22 @@ async function loadDetail(id){
   document.querySelectorAll('[data-rate]').forEach(s=>s.onchange=()=>V(s.dataset.rate).forEach(v=>v.playbackRate=+s.value));
   for(const r of d.runs){const rg=$('#rg-'+r.side),sc=$('#sc-'+r.side);if(!rg)continue;rg.oninput=()=>sc.value=rg.value;sc.oninput=()=>rg.value=sc.value}
   document.querySelectorAll('[data-pref]').forEach(b=>b.onclick=()=>{pref=b.dataset.pref;document.querySelectorAll('[data-pref]').forEach(x=>x.classList.toggle('on',x==b))});
-  const body=action=>{const o={action,preference:pref,feedback:$('#fb').value};d.runs.forEach(r=>o['score_'+r.side]=$('#sc-'+r.side)?.value??'');return o};
-  if(!locked){
-    $('#saveBtn').onclick=()=>api('/api/evals/'+id,body('save')).then(r=>{toast(r.msg);loadEvals()}).catch(e=>toast(e.message));
-    $('#submitBtn').onclick=()=>{if(d.runs.some(r=>$('#sc-'+r.side).value==='')||!pref)return toast('Give both runs a score and choose which was better.');
-      if(!confirm('Submit to the Router? Scores, feedback, videos and the dataset become public and cannot be edited.'))return;
-      api('/api/evals/'+id,body('submit')).then(r=>{toast('Submitting… videos are uploading.');loadEvals();pollBusy(id)}).catch(e=>toast(e.message))};
-    $('#discardBtn').onclick=()=>{const reason=prompt('Why discard this evaluation? (required, nothing is published)');if(!reason)return;
-      api('/api/evals/'+id,{action:'discard',reason}).then(r=>{toast('Discarding…');pollBusy(id)}).catch(e=>toast(e.message))};
-  }
+  const body=action=>{const o={action,preference:pref,feedback:$('#fb').value,notes:{}};
+    d.runs.forEach(r=>{o['score_'+r.side]=$('#sc-'+r.side)?.value??'';o.notes[r.side]=$('#ob-'+r.side)?.value??''});return o};
+  if(locked)return;
+  $('#genBtn').onclick=async()=>{
+    const b=body('save');if(!Object.values(b.notes).some(x=>x.trim()))return toast('Write a few observations for each policy first.');
+    if($('#fb').value.trim()&&!confirm('Replace the current feedback text?'))return;
+    const btn=$('#genBtn'),fb=$('#fb');btn.disabled=true;btn.textContent='Writing…';fb.classList.add('shimmer');
+    try{const r=await api(`/api/evals/${id}/generate`,b);fb.value=r.feedback;await api('/api/evals/'+id,body('save'));toast('Feedback written. Read it and edit if needed.')}
+    catch(e){toast(e.message)}finally{btn.disabled=false;btn.textContent='✨ Write from my observations';fb.classList.remove('shimmer')}};
+  $('#saveBtn').onclick=()=>api('/api/evals/'+id,body('save')).then(r=>{toast(r.msg);loadEvals()}).catch(e=>toast(e.message));
+  $('#submitBtn').onclick=()=>{if(d.runs.some(r=>$('#sc-'+r.side).value==='')||!pref)return toast('Give both runs a score and choose which was better.');
+    if(!$('#fb').value.trim()&&!confirm('Submit without any feedback text?'))return;
+    if(!confirm('Submit to the Router? Scores, feedback, videos and the dataset become public and cannot be edited.'))return;
+    api('/api/evals/'+id,body('submit')).then(r=>{toast('Submitting… videos are uploading.');loadEvals();pollBusy(id)}).catch(e=>toast(e.message))};
+  $('#discardBtn').onclick=()=>{const reason=prompt('Why discard this evaluation? (required, nothing is published)');if(!reason)return;
+    api('/api/evals/'+id,{action:'discard',reason}).then(r=>{toast('Discarding…');pollBusy(id)}).catch(e=>toast(e.message))};
 }
 function pollBusy(id){const t=setInterval(async()=>{const d=await api('/api/evals/'+id).catch(()=>null);if(!d||!d.busy){clearInterval(t);if(view=='review'&&evSel==id)loadEvals();if(d)toast(d.state=='submitted'?'✓ Submitted':d.state=='discarded'?'Discarded':'Router step finished, see the log')}},3000)}
 
@@ -387,18 +483,20 @@ let lastBlob=null;
 function connect(){
   const ws=new WebSocket(`ws://${location.host}/ws`);ws.binaryType='blob';
   ws.onmessage=m=>{
-    if(typeof m.data!=='string'){const u=URL.createObjectURL(m.data);const img=ST&&ST.recording?$('#lv'):$('#pv');img.src=u;if(lastBlob)URL.revokeObjectURL(lastBlob);lastBlob=u;
+    if(typeof m.data!=='string'){const u=URL.createObjectURL(m.data);const img=ST&&ST.recording?$('#lv'):$('#pv');img.src=u;
+      const now=performance.now();if(now-ambT>400){ambT=now;AMB.frame(u)}
+      if(lastBlob)setTimeout((b=>()=>URL.revokeObjectURL(b))(lastBlob),1000);lastBlob=u;
       if(img.id=='pv')$('#pvEmpty').style.display='none';return}
-    const prev=ST;ST=JSON.parse(m.data);renderChecks();renderRun();renderPrompt();
-    if(!ST.preview&&!ST.recording){$('#pvEmpty').style.display='';}
+    const prev=ST;ST=JSON.parse(m.data);renderChecks();renderRun();renderPrompt();mood();
+    if(!ST.preview&&!ST.recording)$('#pvEmpty').style.display='';
     if(prev&&prev.recording&&!ST.recording&&view=='record')loadResumable();
   };
   ws.onclose=()=>{toast('Lost connection to the station, reconnecting…');setTimeout(connect,1500)};
 }
+show(['setup','record','review'].includes(location.hash.slice(1))?location.hash.slice(1):'setup');
 api('/api/config').then(c=>{CFG=c;$('#sub').textContent=`${c.robot.toUpperCase()} · ${c.institution}`;
   let saved={};try{saved=JSON.parse(localStorage.getItem('evform')||'{}')}catch(e){}
   $('#scene').value=saved.scene||c.scene||'';$('#evaluator').value=saved.evaluator||c.evaluator||'';$('#maxsteps').value=c.max_steps;connect()});
-show(['setup','record','review'].includes(location.hash.slice(1))?location.hash.slice(1):'setup');
 </script>
 </body>
 </html>
