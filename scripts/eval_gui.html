@@ -20,17 +20,27 @@
 *{box-sizing:border-box}
 html{background:var(--bg)}
 body{margin:0;min-height:100vh;color:var(--fg);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:transparent}
-/* ambient background: a tiny canvas scaled up and blurred, plus film grain */
-#amb{position:fixed;inset:0;width:100vw;height:100vh;z-index:-3;filter:blur(10px) saturate(1.15);transform:scale(1.06)}
-/* aurora: two slow, translucent light ribbons over the ambient glow; no images */
-.aurora{position:fixed;inset:-20vmax;z-index:-2;pointer-events:none;overflow:hidden}
-.aurora::before,.aurora::after{content:"";position:absolute;inset:0;border-radius:50%;filter:blur(60px);opacity:.30;will-change:transform}
-.aurora::before{background:conic-gradient(from 0deg at 35% 40%,transparent 0 12%,rgba(255,236,214,.95) 20%,transparent 32% 55%,rgba(255,170,120,.85) 66%,transparent 80%);animation:swirl 70s linear infinite}
-.aurora::after{background:conic-gradient(from 180deg at 65% 62%,transparent 0 18%,rgba(255,214,170,.9) 28%,transparent 40% 62%,rgba(236,140,110,.75) 74%,transparent 88%);animation:swirl 95s linear infinite reverse}
-@keyframes swirl{to{transform:rotate(360deg)}}
+/* background: CSS gradients painted once, no canvas or blur. Each step has its own colours, which
+   cross-fade over a second; the layer drifts slowly by transform only, which the GPU composites for free. */
+@property --c1{syntax:'<color>';inherits:true;initial-value:#f6b97c}
+@property --c2{syntax:'<color>';inherits:true;initial-value:#ef8f6d}
+@property --c3{syntax:'<color>';inherits:true;initial-value:#f9dcae}
+body{--c1:#f6b97c;--c2:#ef8f6d;--c3:#f9dcae;transition:--c1 1.2s,--c2 1.2s,--c3 1.2s}
+body[data-mood=record]{--c1:#f4a868;--c2:#e5785c;--c3:#fbe1b6}
+body[data-mood=A]{--c1:#f2a066;--c2:#8a9cf0;--c3:#f6cfa2}
+body[data-mood=B]{--c1:#f2a066;--c2:#e68ab8;--c3:#f6cfa2}
+body[data-mood=stop]{--c1:#ee6a58;--c2:#f08a5d;--c3:#f6b9a0}
+body[data-mood=done]{--c1:#a9dcab;--c2:#f2bf7d;--c3:#f7e2b9}
+body[data-mood=error]{--c1:#e7846f;--c2:#d9a27a;--c3:#f3cdb4}
+body[data-mood=review]{--c1:#f2c27f;--c2:#dfa37c;--c3:#f7e3c5}
+.bg{position:fixed;inset:-6vmax;z-index:-2;pointer-events:none;will-change:transform;animation:drift 45s ease-in-out infinite alternate;
+  background:radial-gradient(42% 48% at 20% 26%,var(--c1),transparent 72%),radial-gradient(40% 46% at 82% 30%,var(--c2),transparent 72%),
+    radial-gradient(55% 48% at 50% 96%,var(--c3),transparent 72%),radial-gradient(35% 35% at 60% 55%,rgba(255,255,255,.35),transparent 70%)}
+@keyframes drift{to{transform:translate3d(3vmax,-2vmax,0)}}
+@media (prefers-color-scheme:dark){.bg{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.bg{animation:none}}
 .vignette{position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(120% 90% at 50% 40%,transparent 55%,rgba(90,45,20,.10))}
-@media (prefers-color-scheme:dark){.aurora::before,.aurora::after{opacity:.12}.vignette{background:radial-gradient(120% 90% at 50% 40%,transparent 50%,rgba(0,0,0,.35))}}
-@media (prefers-reduced-motion:reduce){.aurora::before,.aurora::after{animation:none}}
+@media (prefers-color-scheme:dark){.vignette{background:radial-gradient(120% 90% at 50% 40%,transparent 50%,rgba(0,0,0,.35))}}
 .grain{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.035;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
 .glass,.card{background:var(--glass);border:1px solid var(--edge);box-shadow:var(--shadow)}
@@ -81,7 +91,7 @@ h2{font-size:18px;margin:0}
 .ico{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;font-size:19px;font-weight:700;background:var(--glass2);color:var(--mut);border:1px solid var(--line);transition:.25s}
 .ico.ok{background:var(--ok);color:#fff;border-color:transparent;box-shadow:0 0 0 6px var(--okbg);animation:pop .35s}
 .ico.fail{background:var(--bad);color:#fff;border-color:transparent;box-shadow:0 0 0 6px var(--badbg)}
-.ico.running{border:3px solid var(--acc2);border-top-color:var(--acc);animation:spin .8s linear infinite;font-size:0}
+.ico.running{border:3px solid var(--acc2);border-top-color:var(--acc);animation:spin .8s linear infinite;font-size:0;will-change:transform}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes pop{0%{transform:scale(.6)}70%{transform:scale(1.12)}100%{transform:scale(1)}}
 .check.wide{grid-column:1/-1}
@@ -101,10 +111,11 @@ h2{font-size:18px;margin:0}
 .overlay{position:absolute;left:0;right:0;padding:14px;display:flex;justify-content:space-between;align-items:center;gap:8px}
 .overlay.top{top:0;background:linear-gradient(rgba(0,0,0,.5),transparent)}
 .overlay.bot{bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.6));flex-direction:column;align-items:stretch}
-.chip{background:rgba(255,255,255,.16);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);color:#fff;padding:6px 12px;border-radius:30px;font-weight:600;font-size:14px;display:inline-flex;align-items:center;gap:8px}
+.chip{background:rgba(20,14,10,.5);color:#fff;padding:6px 12px;border-radius:30px;font-weight:600;font-size:14px;display:inline-flex;align-items:center;gap:8px}
 .chip.A{background:var(--A)}.chip.B{background:var(--B)}
-.dot{width:9px;height:9px;border-radius:50%;background:#ff4d4d;animation:pulse 1.4s infinite}
-@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,77,77,.7)}70%{box-shadow:0 0 0 8px rgba(255,77,77,0)}100%{box-shadow:0 0 0 0 rgba(255,77,77,0)}}
+.dot{position:relative;width:9px;height:9px;border-radius:50%;background:#ff4d4d}
+.dot::after{content:"";position:absolute;inset:0;border-radius:50%;background:#ff4d4d;animation:pulse 1.4s ease-out infinite}
+@keyframes pulse{from{transform:scale(1);opacity:.7}to{transform:scale(2.8);opacity:0}}
 .prog{height:8px;border-radius:8px;background:rgba(255,255,255,.2);overflow:hidden;margin-top:8px}
 .prog>div{height:100%;background:linear-gradient(90deg,#f5b26b,#e8704a);width:0;transition:width .3s}
 .stepnums{color:#fff;font-variant-numeric:tabular-nums;font-size:14px;display:flex;justify-content:space-between}
@@ -115,10 +126,11 @@ h2{font-size:18px;margin:0}
 /* the kill switch */
 .kill{width:100%;padding:22px 18px;border-radius:18px;border:0;background:radial-gradient(120% 140% at 50% 0%,#ff5a4a,#c4231a);color:#fff;
   font-weight:800;font-size:22px;letter-spacing:.08em;display:flex;flex-direction:column;align-items:center;gap:4px;
-  box-shadow:0 10px 30px rgba(200,35,26,.45),inset 0 1px 0 rgba(255,255,255,.35);animation:ring 2s infinite}
+  box-shadow:0 10px 30px rgba(200,35,26,.45),inset 0 1px 0 rgba(255,255,255,.35);position:relative}
+.kill::after{content:"";position:absolute;inset:0;border-radius:inherit;border:3px solid rgba(255,90,70,.7);pointer-events:none;animation:ring 2s ease-out infinite}
 .kill small{font-weight:500;font-size:12px;letter-spacing:.02em;opacity:.9}
 .kill:hover:not(:disabled){filter:brightness(1.08)}
-@keyframes ring{0%{box-shadow:0 10px 30px rgba(200,35,26,.45),0 0 0 0 rgba(255,80,60,.55)}70%{box-shadow:0 10px 30px rgba(200,35,26,.45),0 0 0 16px rgba(255,80,60,0)}100%{box-shadow:0 10px 30px rgba(200,35,26,.45),0 0 0 0 rgba(255,80,60,0)}}
+@keyframes ring{from{transform:scale(1);opacity:1}to{transform:scale(1.06,1.22);opacity:0}}
 kbd{font:600 11px ui-monospace,monospace;border:1px solid rgba(255,255,255,.5);border-radius:5px;padding:1px 5px}
 .banner{border-radius:14px;padding:12px 16px;margin-bottom:16px;display:flex;gap:10px;align-items:flex-start}
 .banner.warn{background:var(--warnbg);color:var(--warn)}
@@ -177,7 +189,7 @@ code{font:12px ui-monospace,monospace;background:var(--glass2);padding:1px 5px;b
 </style>
 </head>
 <body>
-<canvas id="amb" width="96" height="60"></canvas><div class="aurora"></div><div class="vignette"></div><div class="grain"></div>
+<div class="bg"></div><div class="vignette"></div><div class="grain"></div>
 <header><div class="bar">
   <div class="brand"><div class="logo">E</div><div><b>Eval Station</b><div class="mut" style="font-size:12px" id="sub"></div></div></div>
   <div class="pill glass" id="srvpill"><span class="d"></span><span>Policy Server</span></div>
@@ -298,35 +310,8 @@ const ICON={ok:'✓',fail:'!',idle:'·',running:''};
 // Live updates arrive many times a second; rewrite an element only when its content changed.
 function setHTML(sel,html){const e=$(sel);if(e._html!==html){e._html=html;e.innerHTML=html}}
 
-// ---- ambient background: low-res drifting warm light that follows the mood, the pointer and the camera ----
-const AMB=(()=>{
-  const cv=$('#amb'),cx=cv.getContext('2d'),W=cv.width,H=cv.height;
-  const dark=matchMedia('(prefers-color-scheme: dark)').matches, still=matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const MOODS={ // base, then three lights
-    setup:['#f3e3d0','#f6b97c','#ef8f6d','#f9dcae'], record:['#f2e0cc','#f4a868','#e5785c','#fbe1b6'],
-    A:['#efe0d4','#f2a066','#6f86ee','#f6cfa2'], B:['#f1ded6','#f2a066','#e06aa6','#f6cfa2'],
-    stop:['#f3d8cf','#ee5340','#f08a5d','#f6b9a0'], done:['#e9eedb','#9fd7a2','#f2bf7d','#f7e2b9'],
-    error:['#f1dcd5','#e7745f','#d9a27a','#f3cdb4'], review:['#f2e6d6','#f2c27f','#d99a72','#f7e3c5']};
-  const hex=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));
-  let cur=MOODS.setup.map(hex), target=cur, img=null, imgA=0, t0=performance.now();
-  function draw(now){
-    const t=(now-t0)/1000;
-    cur=cur.map((c,i)=>c.map((v,j)=>v+(target[i][j]-v)*.25));
-    const rgb=(c,a)=>`rgba(${c.map(Math.round)},${a})`;
-    cx.globalAlpha=1;cx.fillStyle=dark?rgb(cur[0].map(v=>v*.13),1):rgb(cur[0],1);cx.fillRect(0,0,W,H);
-    const lights=[[.22+.12*Math.sin(t*.13),.3+.15*Math.cos(t*.11),.55],[.78+.1*Math.cos(t*.09),.35+.18*Math.sin(t*.15),.5],[.5+.2*Math.sin(t*.07+1),.85+.1*Math.cos(t*.12),.6]];
-    lights.forEach(([x,y,r],i)=>{
-      const g=cx.createRadialGradient(x*W,y*H,0,x*W,y*H,r*W);g.addColorStop(0,rgb(cur[i+1],dark?.55:.9));g.addColorStop(1,rgb(cur[i+1],0));cx.fillStyle=g;cx.fillRect(0,0,W,H)});
-    if(img&&imgA>.01){cx.globalAlpha=imgA*(dark?.5:.38);cx.drawImage(img,0,0,W,H)}
-  }
-  // The light drifts slowly: 8 redraws a second look the same as 60 and cost far less.
-  const tick=()=>{if(!document.hidden)draw(performance.now());if(!still)setTimeout(tick,125)};
-  tick();
-  return {mood(m){target=(MOODS[m]||MOODS.setup).map(hex);if(still)draw(performance.now())},
-          frame(src){const im=new Image();im.onload=()=>{img=im};im.src=src},
-          camera(on){imgA=on?1:0;if(!on)img=null}};
-})();
-let ambT=0;
+// ---- background mood: the CSS does the colours and the fade ----
+const AMB={mood(m){if(document.body.dataset.mood!==m)document.body.dataset.mood=m},camera(){}};
 function mood(){
   const r=ST&&ST.run, active=ST&&(ST.recording||['done','error'].includes(r.phase));
   let m=view;
@@ -525,7 +510,6 @@ function connect(){
   const ws=new WebSocket(`ws://${location.host}/ws`);ws.binaryType='blob';
   ws.onmessage=m=>{
     if(typeof m.data!=='string'){const u=URL.createObjectURL(m.data);const img=ST&&ST.recording?$('#lv'):$('#pv');img.src=u;
-      const now=performance.now();if(now-ambT>400){ambT=now;AMB.frame(u)}
       if(lastBlob)setTimeout((b=>()=>URL.revokeObjectURL(b))(lastBlob),1000);lastBlob=u;
       if(img.id=='pv')$('#pvEmpty').style.display='none';return}
     const prev=ST;ST=JSON.parse(m.data);renderChecks();renderRun();renderPrompt();mood();
