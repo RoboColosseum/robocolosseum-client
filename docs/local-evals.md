@@ -103,8 +103,9 @@ uv pip install --python .venv/bin/python -e '.[gui]'   # once
   press Ctrl-C, which frees the GPU.
 - **API keys…** saves the OpenAI, xAI and Anthropic keys to `local/llm-keys.env` (owner-only).
   **Verify** checks each key with its provider, without spending tokens. The Router is offered
-  only the LLMs whose key works, so the station needs no Claude Code login. If a key fails, the card
-  turns red and names it.
+  only the LLMs whose key works. If a key fails, the card turns red and names it. With no
+  Anthropic key saved, Claude uses the Claude Code login (`local/claude-account.env`), both as a
+  policy and to write feedback.
 - **Bring CAN up** asks for your password in a system pop-up. **Both arms respond** reads each
   motor's registers without powering it.
 - **STOP POLICY** (or Esc) ends the current run at once. Even an action already on its way is held

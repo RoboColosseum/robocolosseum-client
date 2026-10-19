@@ -375,9 +375,10 @@ function renderChecks(){
 
 function openKeys(){
   const rows=ST&&ST.keys&&ST.keys.length?ST.keys:[{provider:'openai',label:'OpenAI · GPT'},{provider:'xai',label:'xAI · Grok'},{provider:'anthropic',label:'Anthropic · Claude'}];
-  $('#keyInputs').innerHTML=rows.map(k=>`<label for="key-${k.provider}">${esc(k.label)} ${k.masked?`<span style="text-transform:none;font-weight:400">· saved ${esc(k.masked)}${k.ok?' ✓':''}</span>`:''}</label>
-    <div class="row" style="flex-wrap:nowrap"><input id="key-${k.provider}" type="password" autocomplete="off" spellcheck="false" placeholder="${k.masked?'keep saved key':'paste key'}">
-    <button class="small" type="button" data-eye="${k.provider}">Show</button></div>`).join('');
+  $('#keyInputs').innerHTML=rows.map(k=>{const login=k.masked=='Claude Code login';
+    return `<label for="key-${k.provider}">${esc(k.label)} ${k.masked?`<span style="text-transform:none;font-weight:400">· ${login?'using':'saved'} ${esc(k.masked)}${k.ok?' ✓':''}</span>`:''}</label>
+    <div class="row" style="flex-wrap:nowrap"><input id="key-${k.provider}" type="password" autocomplete="off" spellcheck="false" placeholder="${login?'leave empty to keep using the Claude Code login':k.masked?'keep saved key':'paste key'}">
+    <button class="small" type="button" data-eye="${k.provider}">Show</button></div>`}).join('');
   document.querySelectorAll('[data-eye]').forEach(b=>b.onclick=()=>{const i=$('#key-'+b.dataset.eye);i.type=i.type=='password'?'text':'password';b.textContent=i.type=='password'?'Show':'Hide'});
   $('#keysModal').classList.add('on');
 }

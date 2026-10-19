@@ -22,6 +22,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import replace
@@ -314,6 +315,7 @@ PROVIDERS = {'openai': ('OpenAI · GPT', 'OPENAI_API_KEY'), 'xai': ('xAI · Grok
              'anthropic': ('Anthropic · Claude', 'ANTHROPIC_API_KEY')}
 KEYS = {}        # provider -> key, loaded from --llm-keys
 KEY_OK = set()   # providers whose key passed the last verification
+CLAUDE_LOGIN = [False]  # Claude runs on the Claude Code login (no Anthropic key saved) and it works
 
 
 def masked(key):
@@ -343,22 +345,40 @@ def verify_key(provider, key):
     return (True, 'works') if r.is_success else (False, f'error {r.status_code}')
 
 
+def claude_login():
+    """Claude Code login (Claude subscription) used for Claude when no Anthropic API key is saved."""
+    try:
+        out = subprocess.run(['claude', 'auth', 'status', '--text'], capture_output=True, text=True,
+                             timeout=30, env={**os.environ, **CLAUDE_ENV})
+    except (OSError, subprocess.TimeoutExpired):
+        return False, 'Claude Code CLI not found'
+    method = next((ln.split(':', 1)[1].strip() for ln in out.stdout.splitlines() if ln.startswith('Login method')), '')
+    if out.returncode or not method:
+        return False, 'Claude Code login expired: run  claude auth login --claudeai  in a terminal'
+    return True, 'works'
+
+
 def check_keys():
     S.set_check('keys', 'running', 'Checking each API key with its provider…')
     rows, problems = [], []
+    CLAUDE_LOGIN[0] = False
     for provider, (label, _) in PROVIDERS.items():
         key = KEYS.get(provider, '')
         ok, msg = verify_key(provider, key) if key else (False, 'missing')
         (KEY_OK.add if ok else KEY_OK.discard)(provider)
-        rows.append({'provider': provider, 'label': label, 'ok': ok, 'msg': msg, 'masked': masked(key) if key else ''})
+        shown = masked(key) if key else ''
+        if provider == 'anthropic' and not key:
+            ok, msg = claude_login()
+            CLAUDE_LOGIN[0], shown = ok, 'Claude Code login'
+        rows.append({'provider': provider, 'label': label, 'ok': ok, 'msg': msg, 'masked': shown})
         if not ok:
-            problems.append(f'{label} key {msg}')
+            problems.append(f'{label}: {msg}' if shown == 'Claude Code login' else f'{label} key {msg}')
     with S.lock:
         S.keys = rows
         S.touch()
     if problems:
         return S.set_check('keys', 'fail', 'Please check your keys: ' + '; '.join(problems) + '.')
-    S.set_check('keys', 'ok', 'All API keys work')
+    S.set_check('keys', 'ok', 'All keys work' + (' (Claude via the Claude Code login)' if CLAUDE_LOGIN[0] else ''))
 
 
 def save_keys(new):
@@ -414,7 +434,7 @@ class PolicyServer:
         self.log = self.log_path.open('ab')
         self.proc = subprocess.Popen(
             [shutil.which('uv') or 'uv', 'run', '--no-sync', 'colosseum-policy-local', '--config', str(ARGS.server_config)],
-            cwd=ARGS.server_dir, env=os.environ, stdout=self.log, stderr=subprocess.STDOUT,
+            cwd=ARGS.server_dir, env={**os.environ, **CLAUDE_ENV}, stdout=self.log, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, start_new_session=True)
         deadline = time.time() + 120
         while time.time() < deadline and self.proc.poll() is None and not port_open(CONFIG.policy_server_url):
@@ -628,7 +648,8 @@ def record_thread(form):
                      scene=form.get('scene', '').strip() or CONFIG.scene,
                      evaluator=form.get('evaluator', '').strip() or CONFIG.evaluator,
                      max_trial_steps=int(form.get('max_steps') or CONFIG.max_trial_steps),
-                     llm_api_keys={p: KEYS[p] for p in KEY_OK if p in KEYS}, llm_account_logins={})
+                     llm_api_keys={p: KEYS[p] for p in KEY_OK if p in KEYS},
+                     llm_account_logins={'anthropic': 'claude-code'} if CLAUDE_LOGIN[0] else {})
     resume = form.get('resume') or None
     S.set_run(phase='starting', side=None, step=0, max_steps=config.max_trial_steps, eval_id=resume,
               instruction=config.instruction, message='Asking the Router for two policies…')
@@ -899,7 +920,7 @@ def generate_feedback(eid: str, body: dict):
     prompt = FEEDBACK_PROMPT.format(task=a.get('task', {}).get('instruction', ''), scene=a.get('scene', '') or '-',
                                     sides='\n'.join(sides), preference=body.get('preference') or 'not chosen')
     if not KEYS.get('anthropic'):
-        raise HTTPException(400, 'Add an Anthropic API key on the Setup page to write feedback')
+        return {'feedback': feedback_via_claude_code(prompt)}
     import anthropic
     client = anthropic.Anthropic(api_key=KEYS['anthropic'], timeout=120)
     try:
@@ -917,6 +938,18 @@ def generate_feedback(eid: str, body: dict):
     if response.stop_reason == 'refusal' or not text:
         raise HTTPException(502, 'No feedback was written; edit the observations and try again')
     return {'feedback': text}
+
+
+def feedback_via_claude_code(prompt):
+    try:
+        out = subprocess.run(['claude', '-p', '--model', 'claude-opus-5-5', '--output-format', 'text',
+                              '--tools', '', '--effort', 'low'], input=prompt, capture_output=True, text=True,
+                             timeout=180, cwd=tempfile.gettempdir(), env={**os.environ, **CLAUDE_ENV})
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise HTTPException(502, f'Feedback generation failed: {e}')
+    if out.returncode or not out.stdout.strip():
+        raise HTTPException(502, 'Feedback generation failed; check the Claude login on the Setup page')
+    return out.stdout.strip()
 
 
 @app.get('/video/{eid}/{run_id}/{cam}')
@@ -982,16 +1015,19 @@ def shutdown():
 
 
 def main():
-    global ARGS, CONFIG
+    global ARGS, CONFIG, CLAUDE_ENV
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--config', default=str(CLIENT / 'configs/robot.yam-eef-llm.yaml'))
     p.add_argument('--server-dir', type=Path, default=Path.home() / 'colosseum-policy-server')
     p.add_argument('--server-config', default='local/local-runtime-yam-agent-local.yaml',
                    help='Policy Server config, relative to --server-dir')
     p.add_argument('--llm-keys', type=Path, default=CLIENT / 'local/llm-keys.env')
+    p.add_argument('--claude-env', type=Path, default=CLIENT / 'local/claude-account.env',
+                   help='env for the Claude Code login, used for Claude when no Anthropic key is saved')
     p.add_argument('--port', type=int, default=8770)
     ARGS = p.parse_args()
     CONFIG = RobotClientConfig.from_yaml(ARGS.config)
+    CLAUDE_ENV = source_env(ARGS.claude_env)
     env = source_env(ARGS.llm_keys)
     KEYS.update({p: env[var] for p, (_, var) in PROVIDERS.items() if env.get(var)})
     os.environ.update({PROVIDERS[p][1]: k for p, k in KEYS.items()})
