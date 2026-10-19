@@ -162,11 +162,12 @@ pre{background:var(--glass2);border:1px solid var(--line);border-radius:12px;pad
 .gen label{margin:0}
 .shimmer{background:linear-gradient(90deg,var(--glass2) 25%,var(--acc2) 50%,var(--glass2) 75%);background-size:200% 100%;animation:sh 1.2s linear infinite}
 @keyframes sh{to{background-position:-200% 0}}
-.keyrows{display:grid;gap:6px;margin-top:10px}
-.keyrow{display:flex;gap:10px;align-items:center;font-size:14px;padding:6px 10px;border-radius:10px;background:var(--glass2)}
-.keyrow b,.keyrow .mut{white-space:nowrap}
+.keyrows{display:grid;gap:6px;margin-top:10px;min-width:0}
+.keyrow{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:10px;align-items:center;font-size:14px;line-height:1.25;padding:7px 10px;border-radius:10px;background:var(--glass2)}
+.keyrow .kname{min-width:0}.keyrow .kname b,.keyrow .kname small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.keyrow .kname small{color:var(--mut);font-size:12px}
 .keyrow .kdot{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:700;color:#fff;background:var(--ok)}
-.keyrow.bad .kdot{background:var(--bad)}.keyrow .kmsg{margin-left:auto;color:var(--mut)}.keyrow.bad .kmsg{color:var(--bad);font-weight:600}
+.keyrow.bad .kdot{background:var(--bad)}.keyrow .kmsg{color:var(--mut);text-align:right}.keyrow.bad .kmsg{color:var(--bad);font-weight:600}
 code{font:12px ui-monospace,monospace;background:var(--glass2);padding:1px 5px;border-radius:5px}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--fg);color:var(--bg);padding:12px 20px;border-radius:14px;box-shadow:var(--shadow);z-index:30;opacity:0;transition:.25s;pointer-events:none;max-width:90vw}
 .toast.on{opacity:1;transform:translateX(-50%)}
@@ -359,7 +360,7 @@ function renderChecks(){
       <span class="tag">${ST.thumbs.includes(c)?'<span class="tick">✓</span>':''}${{head_image:'Top',left_image:'Left wrist',right_image:'Right wrist'}[c]||c}</span></div>`).join('')}
   const kr=JSON.stringify(ST.keys||[]);
   if($('#keyrows').dataset.k!==kr){$('#keyrows').dataset.k=kr;
-    $('#keyrows').innerHTML=(ST.keys||[]).map(k=>`<div class="keyrow ${k.ok?'ok':'bad'}"><span class="kdot">${k.ok?'✓':'!'}</span><b>${esc(k.label)}</b><span class="mut">${esc(k.source||'')}</span><span class="kmsg">${esc(k.msg)}</span></div>`).join('')}
+    $('#keyrows').innerHTML=(ST.keys||[]).map(k=>`<div class="keyrow ${k.ok?'ok':'bad'}"><span class="kdot">${k.ok?'✓':'!'}</span><span class="kname"><b>${esc(k.label)}</b><small>${esc(k.source||'not set')}</small></span><span class="kmsg">${esc(k.msg)}</span></div>`).join('')}
   const missing=REQUIRED.filter(k=>ST.checks[k].status!='ok');
   $('#readymsg').innerHTML=missing.length?`Still needed: ${missing.map(k=>CHECKS.find(c=>c[0]==k)[1]).join(', ')}`:'<span style="color:var(--ok);font-weight:600">✓ All set. You can start recording.</span>';
   document.querySelector('.steps [data-v=setup]').classList.toggle('done',!missing.length);
