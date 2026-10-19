@@ -154,8 +154,11 @@ pre{background:var(--glass2);border:1px solid var(--line);border-radius:12px;pad
 .evitem .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em;color:#fff;background:var(--st)}
 .st-review{--st:#d98b0b}.st-scored{--st:#3d63c9}.st-submitted{--st:#2f8a4c}.st-discarded{--st:#c9372c}.st-superseded{--st:#8c8178}.st-interrupted{--st:#c46a2a}
-.legend{display:flex;gap:10px;flex-wrap:wrap;padding:0 10px 6px;font-size:11px;color:var(--mut)}
-.legend span{display:inline-flex;align-items:center;gap:5px}.legend i{width:8px;height:8px;border-radius:50%;background:var(--st)}
+.filters{display:flex;gap:6px;flex-wrap:wrap;padding:2px 10px 8px}
+.filters button{padding:5px 11px;font-size:13px;border-radius:20px;display:inline-flex;align-items:center;gap:6px}
+.filters button.on{background:var(--acc);color:#fff;border-color:transparent}
+.filters .n{font-size:11px;font-weight:700;min-width:18px;padding:0 5px;border-radius:10px;background:var(--line);text-align:center}
+.filters button.on .n{background:rgba(255,255,255,.25)}
 .ab{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:1100px){.ab{grid-template-columns:1fr}}
 .side{border-top:4px solid var(--sc)}
@@ -279,7 +282,7 @@ code{font:12px ui-monospace,monospace;background:var(--glass2);padding:1px 5px;b
 <section class="view" id="v-review">
   <div class="revgrid">
     <div class="card" style="padding:8px"><div class="spread" style="padding:10px 10px 6px"><h2>Evaluations</h2><button class="small ghost" id="refresh" title="Refresh">↻</button></div>
-      <div class="legend"><span class="st-review"><i></i>needs score</span><span class="st-scored"><i></i>not submitted</span><span class="st-submitted"><i></i>submitted</span><span class="st-discarded"><i></i>discarded</span><span class="st-interrupted"><i></i>interrupted</span><span class="st-superseded"><i></i>replaced</span></div>
+      <div class="filters" id="filters"></div>
       <div class="evlist" id="evlist"></div></div>
     <div id="evdetail"><div class="card mut">Pick an evaluation on the left.</div></div>
   </div>
@@ -446,11 +449,19 @@ function renderPrompt(){
 
 // ---- review ----
 const LBL={review:'needs score',scored:'not submitted',submitted:'submitted',discarded:'discarded',superseded:'replaced',interrupted:'interrupted'};
+// "To review" = recorded but not yet submitted (needs a score, or scored but not sent)
+const FILTERS=[['all','All',()=>true],['todo','To review',e=>e.state=='review'||e.state=='scored'],
+  ['submitted','Submitted',e=>e.state=='submitted'],['discarded','Discarded',e=>e.state=='discarded']];
+let evFilter=(()=>{try{return localStorage.getItem('evfilter')||'todo'}catch(e){return 'todo'}})();
 async function loadEvals(){
-  const evs=await api('/api/evals').catch(()=>[]);
+  const all=await api('/api/evals').catch(()=>[]);
+  if(!FILTERS.some(f=>f[0]==evFilter))evFilter='all';
+  $('#filters').innerHTML=FILTERS.map(([k,l,f])=>`<button data-filter="${k}" class="${k==evFilter?'on':''}">${l}<span class="n">${all.filter(f).length}</span></button>`).join('');
+  $('#filters').querySelectorAll('button').forEach(b=>b.onclick=()=>{evFilter=b.dataset.filter;try{localStorage.setItem('evfilter',evFilter)}catch(e){};loadEvals()});
+  const evs=all.filter(FILTERS.find(f=>f[0]==evFilter)[2]);
   if(!evSel&&evs.length)evSel=(evs.find(e=>e.state=='review')||evs[0]).id;
   $('#evlist').innerHTML=evs.map(e=>`<button class="evitem st-${e.state} ${e.id==evSel?'on':''}" data-id="${e.id}"><div class="t">${esc(e.instruction)||'<i>no instruction</i>'}</div>
-    <div class="spread"><span class="mut" style="font-size:12px">${new Date(e.time*1000).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><span class="badge">${LBL[e.state]}</span></div></button>`).join('')||'<p class="mut" style="padding:10px">No evaluations yet.</p>';
+    <div class="spread"><span class="mut" style="font-size:12px">${new Date(e.time*1000).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><span class="badge">${LBL[e.state]}</span></div></button>`).join('')||`<p class="mut" style="padding:10px">${!all.length?'No evaluations yet.':evFilter=='todo'?'✓ All caught up. Nothing is waiting for a score.':'Nothing here.'}</p>`;
   $('#evlist').querySelectorAll('.evitem').forEach(b=>b.onclick=()=>{evSel=b.dataset.id;loadEvals()});
   if(evSel)loadDetail(evSel);
 }
