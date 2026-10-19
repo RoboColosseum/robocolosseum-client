@@ -6,14 +6,14 @@
 <title>Eval Station</title>
 <style>
 :root{
-  --bg:#f3e8dc;--glass:rgba(255,250,244,.62);--glass2:rgba(255,248,240,.5);--edge:rgba(255,255,255,.65);--line:rgba(120,80,50,.16);
+  --bg:#f3e8dc;--glass:rgba(255,250,244,.80);--glass2:rgba(255,248,240,.62);--edge:rgba(255,255,255,.65);--line:rgba(120,80,50,.16);
   --fg:#2b1f17;--mut:#7c6656;--acc:#b4532a;--acc2:rgba(180,83,42,.12);--ok:#2f8a4c;--okbg:rgba(47,138,76,.13);
   --bad:#c9372c;--badbg:rgba(201,55,44,.12);--warn:#b26a00;--warnbg:rgba(214,140,20,.15);--info:#3d63c9;--infobg:rgba(61,99,201,.12);
   --A:#4565d8;--B:#c2457f;--shadow:0 1px 2px rgba(60,30,10,.06),0 10px 30px rgba(60,30,10,.10);--r:18px;
   --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
 }
 @media (prefers-color-scheme:dark){:root{
-  --bg:#17110d;--glass:rgba(34,26,21,.62);--glass2:rgba(40,31,25,.5);--edge:rgba(255,220,190,.10);--line:rgba(255,220,190,.12);
+  --bg:#17110d;--glass:rgba(34,26,21,.84);--glass2:rgba(44,34,28,.7);--edge:rgba(255,220,190,.10);--line:rgba(255,220,190,.12);
   --fg:#f4e9df;--mut:#b5a191;--acc:#f08a5d;--acc2:rgba(240,138,93,.16);--ok:#5ccf86;--okbg:rgba(92,207,134,.14);
   --bad:#ff6b5e;--badbg:rgba(255,107,94,.14);--warn:#f2b64e;--warnbg:rgba(242,182,78,.14);--info:#8aa6ff;--infobg:rgba(138,166,255,.14);
   --A:#7d93ff;--B:#f07fb4;--shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px rgba(0,0,0,.35)}}
@@ -21,19 +21,19 @@
 html{background:var(--bg)}
 body{margin:0;min-height:100vh;color:var(--fg);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:transparent}
 /* ambient background: a tiny canvas scaled up and blurred, plus film grain */
-#amb{position:fixed;inset:0;width:100vw;height:100vh;z-index:-3;filter:blur(26px) saturate(1.15);transform:scale(1.15)}
+#amb{position:fixed;inset:0;width:100vw;height:100vh;z-index:-3;filter:blur(10px) saturate(1.15);transform:scale(1.06)}
 /* aurora: two slow, translucent light ribbons over the ambient glow; no images */
 .aurora{position:fixed;inset:-20vmax;z-index:-2;pointer-events:none;overflow:hidden}
-.aurora::before,.aurora::after{content:"";position:absolute;inset:0;border-radius:50%;filter:blur(70px);opacity:.38;mix-blend-mode:soft-light;will-change:transform}
+.aurora::before,.aurora::after{content:"";position:absolute;inset:0;border-radius:50%;filter:blur(60px);opacity:.30;will-change:transform}
 .aurora::before{background:conic-gradient(from 0deg at 35% 40%,transparent 0 12%,rgba(255,236,214,.95) 20%,transparent 32% 55%,rgba(255,170,120,.85) 66%,transparent 80%);animation:swirl 70s linear infinite}
 .aurora::after{background:conic-gradient(from 180deg at 65% 62%,transparent 0 18%,rgba(255,214,170,.9) 28%,transparent 40% 62%,rgba(236,140,110,.75) 74%,transparent 88%);animation:swirl 95s linear infinite reverse}
 @keyframes swirl{to{transform:rotate(360deg)}}
 .vignette{position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(120% 90% at 50% 40%,transparent 55%,rgba(90,45,20,.10))}
-@media (prefers-color-scheme:dark){.aurora::before,.aurora::after{opacity:.22;mix-blend-mode:screen}.vignette{background:radial-gradient(120% 90% at 50% 40%,transparent 50%,rgba(0,0,0,.35))}}
+@media (prefers-color-scheme:dark){.aurora::before,.aurora::after{opacity:.12}.vignette{background:radial-gradient(120% 90% at 50% 40%,transparent 50%,rgba(0,0,0,.35))}}
 @media (prefers-reduced-motion:reduce){.aurora::before,.aurora::after{animation:none}}
-.grain{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.07;mix-blend-mode:overlay;
+.grain{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.035;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
-.glass,.card{background:var(--glass);-webkit-backdrop-filter:blur(18px) saturate(1.3);backdrop-filter:blur(18px) saturate(1.3);border:1px solid var(--edge);box-shadow:var(--shadow)}
+.glass,.card{background:var(--glass);border:1px solid var(--edge);box-shadow:var(--shadow)}
 .card{border-radius:var(--r);padding:20px;transition:transform .2s,box-shadow .2s}
 button{font:inherit;cursor:pointer;border-radius:12px;padding:10px 18px;background:var(--glass2);color:var(--fg);border:1px solid var(--line);transition:transform .15s,filter .15s,background .2s}
 button:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.04)}
@@ -50,7 +50,7 @@ textarea{resize:vertical;min-height:90px}
 label{display:block;font-weight:600;font-size:12px;margin:14px 0 6px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
 .mut{color:var(--mut)}
 .eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--acc)}
-header{position:sticky;top:0;z-index:5;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--bg) 45%,transparent);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px)}
+header{position:sticky;top:0;z-index:5;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--bg) 82%,transparent)}
 .bar{max-width:1320px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
 .brand{display:flex;align-items:center;gap:12px}
 .brand .logo{width:38px;height:38px;border-radius:12px 12px 6px 6px;background:linear-gradient(160deg,var(--acc),#e7a35a);display:grid;place-items:center;color:#fff;font:600 19px var(--serif);box-shadow:0 4px 14px color-mix(in srgb,var(--acc) 40%,transparent)}
@@ -128,7 +128,7 @@ kbd{font:600 11px ui-monospace,monospace;border:1px solid rgba(255,255,255,.5);b
 details.log{margin-top:16px}
 details.log summary{cursor:pointer;color:var(--mut);font-size:14px}
 pre{background:var(--glass2);border:1px solid var(--line);border-radius:12px;padding:12px;max-height:280px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-word;margin:8px 0 0}
-.modal{position:fixed;inset:0;background:rgba(30,18,10,.45);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);display:none;place-items:center;z-index:20;padding:20px}
+.modal{position:fixed;inset:0;background:rgba(30,18,10,.55);display:none;place-items:center;z-index:20;padding:20px}
 .modal.on{display:grid;animation:rise .25s}
 .modal .card{max-width:540px;width:100%;padding:30px}
 .modal h2{font:500 26px var(--serif);margin-bottom:8px}
@@ -294,6 +294,8 @@ const REQUIRED=['can','arms','cameras','router','keys','server'];
 const api=(p,b)=>fetch(p,b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(async r=>{const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||r.statusText);return j});
 function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),3500)}
 const ICON={ok:'✓',fail:'!',idle:'·',running:''};
+// Live updates arrive many times a second; rewrite an element only when its content changed.
+function setHTML(sel,html){const e=$(sel);if(e._html!==html){e._html=html;e.innerHTML=html}}
 
 // ---- ambient background: low-res drifting warm light that follows the mood, the pointer and the camera ----
 const AMB=(()=>{
@@ -308,17 +310,18 @@ const AMB=(()=>{
   let cur=MOODS.setup.map(hex), target=cur, img=null, imgA=0, t0=performance.now();
   function draw(now){
     const t=(now-t0)/1000;
-    cur=cur.map((c,i)=>c.map((v,j)=>v+(target[i][j]-v)*.04));
+    cur=cur.map((c,i)=>c.map((v,j)=>v+(target[i][j]-v)*.25));
     const rgb=(c,a)=>`rgba(${c.map(Math.round)},${a})`;
     cx.globalAlpha=1;cx.fillStyle=dark?rgb(cur[0].map(v=>v*.13),1):rgb(cur[0],1);cx.fillRect(0,0,W,H);
     const lights=[[.22+.12*Math.sin(t*.13),.3+.15*Math.cos(t*.11),.55],[.78+.1*Math.cos(t*.09),.35+.18*Math.sin(t*.15),.5],[.5+.2*Math.sin(t*.07+1),.85+.1*Math.cos(t*.12),.6]];
     lights.forEach(([x,y,r],i)=>{
       const g=cx.createRadialGradient(x*W,y*H,0,x*W,y*H,r*W);g.addColorStop(0,rgb(cur[i+1],dark?.55:.9));g.addColorStop(1,rgb(cur[i+1],0));cx.fillStyle=g;cx.fillRect(0,0,W,H)});
     if(img&&imgA>.01){cx.globalAlpha=imgA*(dark?.5:.38);cx.drawImage(img,0,0,W,H)}
-    if(!still)requestAnimationFrame(draw);
   }
-  requestAnimationFrame(draw);
-  return {mood(m){target=(MOODS[m]||MOODS.setup).map(hex);if(still)requestAnimationFrame(draw)},
+  // The light drifts slowly: 8 redraws a second look the same as 60 and cost far less.
+  const tick=()=>{if(!document.hidden)draw(performance.now());if(!still)setTimeout(tick,125)};
+  tick();
+  return {mood(m){target=(MOODS[m]||MOODS.setup).map(hex);if(still)draw(performance.now())},
           frame(src){const im=new Image();im.onload=()=>{img=im};im.src=src},
           camera(on){imgA=on?1:0;if(!on)img=null}};
 })();
@@ -418,15 +421,16 @@ function renderRun(){
   const showFrame=['running','stopping'].includes(r.phase);
   $('#lvEmpty').style.display=$('#lv').src&&showFrame?'none':'';
   const idle=['error','done'].includes(r.phase);
-  $('#lvEmpty').innerHTML=showFrame?'':`<div>${idle?'':'<div class="ico running" style="margin:0 auto 12px;width:44px;height:44px"></div>'}${esc(r.message||PHASE[r.phase]||'')}</div>`;
+  setHTML('#lvEmpty',showFrame?'':`<div>${idle?'':'<div class="ico running" style="margin:0 auto 12px;width:44px;height:44px"></div>'}${esc(r.message||PHASE[r.phase]||'')}</div>`);
   const sides=['A','B'],cur=sides.indexOf(r.side),done=r.phase=='done',err=r.phase=='error';
-  $('#timeline').innerHTML=sides.map((s,i)=>{const st=done||i<cur||(i==cur&&r.phase=='between')?'ok':i==cur?(err?'fail':'running'):'idle';
+  setHTML('#timeline',sides.map((s,i)=>{const st=done||i<cur||(i==cur&&r.phase=='between')?'ok':i==cur?(err?'fail':'running'):'idle';
     return `<div class="tl ${i==cur&&!idle?'cur':''}"><div class="ico ${st}">${ICON[st]}</div><div><b>Policy ${s}</b><div class="mut" style="font-size:13px">${st=='ok'?'Recorded':st=='running'?PHASE[r.phase]:st=='fail'?'Stopped':'Waiting'}</div></div></div>`}).join('')
-    +`<div class="tl ${done?'cur':''}"><div class="ico ${done?'ok':'idle'}">${done?'✓':'·'}</div><div><b>Score both runs</b><div class="mut" style="font-size:13px">In Review</div></div></div>`;
+    +`<div class="tl ${done?'cur':''}"><div class="ico ${done?'ok':'idle'}">${done?'✓':'·'}</div><div><b>Score both runs</b><div class="mut" style="font-size:13px">In Review</div></div></div>`);
   const m=$('#runMsg');m.style.display=r.message?'':'none';m.className='banner '+(err||r.phase=='stopping'?'bad':done?'ok':'info');m.textContent=r.message;
   $('#killBox').style.display=r.phase=='running'?'':'none';
   $('#doneBox').style.display=done?'':'none';$('#errBox').style.display=err&&!ST.recording?'':'none';
-  const lg=$('#log'),stick=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;lg.textContent=ST.log.join('\n');if(stick)lg.scrollTop=lg.scrollHeight;
+  const lg=$('#log'),txt=ST.log.join('\n');
+  if(lg.textContent!==txt){const stick=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;lg.textContent=txt;if(stick)lg.scrollTop=lg.scrollHeight}
 }
 function renderPrompt(){
   const p=ST.prompt,m=$('#modal');

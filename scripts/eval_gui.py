@@ -972,7 +972,8 @@ async def ws(sock: WebSocket):
     try:
         while True:
             now = time.monotonic()
-            if S.version != sent_version or now - last_beat > 2:
+            # State at most 5 times a second (steps change it ~30 times); camera frames up to 15.
+            if (S.version != sent_version and now - last_beat > .2) or now - last_beat > 2:
                 sent_version, last_beat = S.version, now
                 await sock.send_text(json.dumps(snapshot()))
             if S.frame_seq != sent_frame and S.frame is not None:
