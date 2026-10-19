@@ -89,8 +89,9 @@ the Policy Server's `local-policy-logs/`.
 `scripts/eval_gui.py` runs the whole flow below from a single browser page. The page has three
 tabs: **Setup** (GPU, CAN, both arms, 3 cameras, Router, AI API keys and the Policy Server, each
 with a green tick), **Record** (task form with a live top-camera view, then A and B with live
-frames, a step counter and a red STOP button) and **Review** (scores, preference, your observations
-turned into English feedback by Claude, then Submit or Discard as in `review_evals.py`).
+frames, a step counter and a red STOP button) and **Review** (scores, a speed / smoothness / safety /
+precision comparison, preference, and your observations turned into English feedback by Claude Haiku,
+then Submit or Discard as in `review_evals.py`).
 
 ```bash
 cd ~/colosseum-client

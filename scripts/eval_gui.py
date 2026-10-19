@@ -716,6 +716,7 @@ def eval_detail(eid):
                       'stop': operator_stop(r['path']), 'notes': notes.get(r['side'], ''),
                       'score': None if outcomes.get(r['side'], {}).get('partial_success') is None
                       else round(outcomes[r['side']]['partial_success'] * 100)} for r in rv.runs(d)],
+            'factors': notes.get('factors', {}),
             'preference': res.get('preference') or draft.get('preference') or '',
             'feedback': res.get('feedback', draft.get('feedback', '')),
             'log': log.read_text()[-4000:] if log.exists() else ''}
@@ -866,7 +867,10 @@ def act_eval(eid: str, body: dict):
             raise HTTPException(400, 'A reason is required to discard')
         return {'msg': plain(rv.router(eid, 'discard', reason))}
     if isinstance(body.get('notes'), dict):
-        notes_path(eid).write_text(json.dumps({k: str(v) for k, v in body['notes'].items()}, ensure_ascii=False))
+        notes = {k: str(v) for k, v in body['notes'].items() if k in ('A', 'B')}
+        if isinstance(body.get('factors'), dict):
+            notes['factors'] = {k: v for k, v in body['factors'].items() if k in FACTORS and v in FACTOR_TEXT}
+        notes_path(eid).write_text(json.dumps(notes, ensure_ascii=False))
     form = {k: [str(v)] for k, v in body.items() if k.startswith('score_') or k in ('preference', 'feedback')}
     try:
         rv.save(eid, form)
@@ -880,12 +884,19 @@ def act_eval(eid: str, body: dict):
             'Draft saved. Both scores and a preference are needed to submit.'}
 
 
+FACTORS = ('speed', 'smoothness', 'safety', 'precision')
+# A2/B2 = better, A1/B1 = slightly better; 'none' (Safety only) = not evaluated, left out of the feedback
+FACTOR_TEXT = {'A2': 'Policy A better', 'A1': 'Policy A slightly better', 'tie': 'tie',
+               'B1': 'Policy B slightly better', 'B2': 'Policy B better', 'none': None}
+
 FEEDBACK_PROMPT = """You write the evaluator feedback for a blind A/B comparison of two robot policies that
 attempted the same task. Turn the evaluator's own observations into clear, consistent feedback.
 
 Task: {task}
 Scene: {scene}
 {sides}
+Evaluator's factor comparison:
+{factors}
 Evaluator preference: {preference}
 
 Write in English (the observations may be in English or Chinese), as plain text in exactly this form:
@@ -893,8 +904,9 @@ Policy A: <2-3 sentences: what it achieved, where and how it failed, anything un
 Policy B: <2-3 sentences, same>
 Overall: <1-2 sentences: which did better and the deciding difference>
 
-Rules: use only facts from the observations, scores and run endings; never invent details. Keep it
-consistent with the scores and the preference. Neutral, specific, no model names, no markdown, under 130 words."""
+Rules: use only facts from the observations, scores, run endings and factor comparison; never invent
+details. Reflect each compared factor where it fits (a tie means no advantage either way); do not mention
+a factor that is not listed. Keep it consistent with the scores, the factors and the preference. Neutral, specific, no model names, no markdown, under 130 words."""
 
 
 @app.post('/api/evals/{eid}/generate')
@@ -913,16 +925,21 @@ def generate_feedback(eid: str, body: dict):
                      f'Evaluator observations for {side}: {obs}')
     if not any((body.get('notes') or {}).values()):
         raise HTTPException(400, 'Write a few observations for each policy first')
+    picked = body.get('factors') or {}
+    middle = {f: 'none' if f == 'safety' else 'tie' for f in FACTORS}  # Safety's middle option is No eval
+    if any(picked.get(f) not in ('A2', 'A1', middle[f], 'B1', 'B2') for f in FACTORS):
+        raise HTTPException(400, 'Select one option for every factor under “Compare the policies” first')
+    factors = '\n'.join(f'- {f.capitalize()}: {FACTOR_TEXT[picked[f]]}' for f in FACTORS if FACTOR_TEXT[picked[f]])
     prompt = FEEDBACK_PROMPT.format(task=a.get('task', {}).get('instruction', ''), scene=a.get('scene', '') or '-',
+                                    factors=factors,
                                     sides='\n'.join(sides), preference=body.get('preference') or 'not chosen')
     if not KEYS.get('anthropic'):
         return {'feedback': feedback_via_claude_code(prompt)}
     import anthropic
     client = anthropic.Anthropic(api_key=KEYS['anthropic'], timeout=120)
     try:
-        response = client.beta.messages.create(
-            model='claude-opus-5-5', max_tokens=16000, output_config={'effort': 'low'},
-            betas=['server-side-fallback-2026-07-01'], fallbacks='default',
+        response = client.messages.create(
+            model='claude-haiku-5-5', max_tokens=16000, output_config={'effort': 'low'},
             messages=[{'role': 'user', 'content': prompt}])
     except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
         raise HTTPException(502, 'The Anthropic key was rejected; please check your keys on the Setup page')
@@ -938,7 +955,7 @@ def generate_feedback(eid: str, body: dict):
 
 def feedback_via_claude_code(prompt):
     try:
-        out = subprocess.run(['claude', '-p', '--model', 'claude-opus-5-5', '--output-format', 'text',
+        out = subprocess.run(['claude', '-p', '--model', 'claude-haiku-5-5', '--output-format', 'text',
                               '--tools', '', '--effort', 'low'], input=prompt, capture_output=True, text=True,
                              timeout=180, cwd=tempfile.gettempdir(), env={**os.environ, **CLAUDE_ENV})
     except (OSError, subprocess.TimeoutExpired) as e:

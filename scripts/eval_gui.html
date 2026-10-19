@@ -166,6 +166,14 @@ pre{background:var(--glass2);border:1px solid var(--line);border-radius:12px;pad
 .score{display:flex;align-items:center;gap:14px;margin-top:6px}
 .score input[type=range]{flex:1;accent-color:var(--sc);padding:0;background:none;border:0}
 .score .num{width:84px;text-align:center;font-size:20px;font-weight:700}
+.factor{margin-top:18px}.fname{font-weight:700}
+.fsides{display:flex;justify-content:space-between;font-size:12px;color:var(--mut);margin:4px 0 6px}
+.fsides span:first-child{color:var(--A)}.fsides span:last-child{color:var(--B)}
+.scale{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--glass2)}
+.scale button{border:0;border-radius:0;border-left:1px solid var(--line);background:transparent;padding:14px 6px;font-size:13px;transition:background .15s,color .15s}
+.scale button:first-child{border-left:0}
+.scale button:hover:not(:disabled){transform:none;background:var(--acc2)}
+.scale button.sa.on{background:var(--A);color:#fff}.scale button.sb.on{background:var(--B);color:#fff}.scale button.mid.on{background:var(--fg);color:var(--bg)}
 .seg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .seg button{padding:14px;font-weight:600}
 .seg button.on{background:var(--acc);color:#fff;border-color:transparent}
@@ -447,10 +455,13 @@ async function loadEvals(){
   if(evSel)loadDetail(evSel);
 }
 $('#refresh').onclick=loadEvals;
-let pref='';
+let pref='', factors={};
+const FACT=[['speed','Speed'],['smoothness','Smoothness'],['safety','Safety'],['precision','Precision']];
+// A2/B2 better, A1/B1 slightly better; Safety's middle option is No eval instead of Tie
+const fopts=f=>[['A2','Better'],['A1','Slightly better'],f=='safety'?['none','No eval']:['tie','Tie'],['B1','Slightly better'],['B2','Better']];
 async function loadDetail(id){
   const d=await api('/api/evals/'+id).catch(e=>{toast(e.message)});if(!d)return;
-  const locked=['submitted','discarded','superseded'].includes(d.state)||d.busy, dis=locked?'disabled':'';pref=d.preference;
+  const locked=['submitted','discarded','superseded'].includes(d.state)||d.busy, dis=locked?'disabled':'';pref=d.preference;factors={...(d.factors||{})};
   const names={head_image:'Top',left_image:'Left wrist',right_image:'Right wrist'};
   const stopNote=s=>!s?'':s.reason=='stopped'?`<div class="banner bad" style="margin:12px 0 0">■ Stopped by the evaluator at step ${s.step}. Recorded up to that step.</div>`
     :`<div class="banner info" style="margin:12px 0 0">✓ Ended by the evaluator as done at step ${s.step}.</div>`;
@@ -470,6 +481,11 @@ async function loadDetail(id){
   $('#evdetail').innerHTML=`<div class="card" style="margin-bottom:16px"><div class="spread"><div class="eyebrow">Task</div><span class="badge st-${d.state}">${LBL[d.state]}</span></div>
     <div style="font:500 24px/1.25 var(--serif);margin-top:4px">${esc(d.instruction)}</div><div class="mut">Scene: ${esc(d.scene)||'–'} · <span style="font-family:ui-monospace,monospace;font-size:12px">${id}</span></div></div>
     ${banner}<div class="ab">${d.runs.map(side).join('')}</div>
+    <div class="card" style="margin-top:16px"><h2 style="font:500 26px var(--serif)">Compare the policies</h2>
+    <p class="mut" style="font-size:13px;margin:6px 0 4px">Select one option for every factor. Tie means no advantage for either policy. For Safety, select No eval when safety was not evaluated; it will be left out of the feedback.</p>
+    ${FACT.map(([f,name])=>`<div class="factor"><div class="fname">${name}</div><div class="fsides"><span>Policy A</span><span>Policy B</span></div>
+      <div class="scale">${fopts(f).map(([v,l])=>`<button type="button" data-f="${f}" data-v="${v}" class="${v[0]=='A'?'sa':v[0]=='B'?'sb':'mid'} ${factors[f]==v?'on':''}" ${dis}>${l}</button>`).join('')}</div></div>`).join('')}
+    <div class="mut" id="fcount" style="font-size:13px;margin-top:14px"></div></div>
     <div class="card" style="margin-top:16px"><label style="margin-top:0">Which policy did better?</label>
     <div class="seg">${[['A','A was better'],['tie','About the same'],['B','B was better']].map(([v,l])=>`<button data-pref="${v}" class="${pref==v?'on':''}" ${dis}>${l}</button>`).join('')}</div>
     <div class="gen"><label>Overall feedback <span style="text-transform:none;font-weight:400">· English, sent to the Router</span></label>
@@ -484,12 +500,16 @@ async function loadDetail(id){
   document.querySelectorAll('[data-restart]').forEach(b=>b.onclick=()=>V(b.dataset.restart).forEach(v=>{v.currentTime=0;v.play()}));
   document.querySelectorAll('[data-rate]').forEach(s=>s.onchange=()=>V(s.dataset.rate).forEach(v=>v.playbackRate=+s.value));
   for(const r of d.runs){const rg=$('#rg-'+r.side),sc=$('#sc-'+r.side);if(!rg)continue;rg.oninput=()=>sc.value=rg.value;sc.oninput=()=>rg.value=sc.value}
+  const fcount=()=>$('#fcount').textContent=`${FACT.filter(([f])=>factors[f]).length} of ${FACT.length} factors selected.`;fcount();
+  document.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{factors[b.dataset.f]=b.dataset.v;
+    document.querySelectorAll(`[data-f="${b.dataset.f}"]`).forEach(x=>x.classList.toggle('on',x==b));fcount()});
   document.querySelectorAll('[data-pref]').forEach(b=>b.onclick=()=>{pref=b.dataset.pref;document.querySelectorAll('[data-pref]').forEach(x=>x.classList.toggle('on',x==b))});
-  const body=action=>{const o={action,preference:pref,feedback:$('#fb').value,notes:{}};
+  const body=action=>{const o={action,preference:pref,feedback:$('#fb').value,notes:{},factors:{...factors}};
     d.runs.forEach(r=>{o['score_'+r.side]=$('#sc-'+r.side)?.value??'';o.notes[r.side]=$('#ob-'+r.side)?.value??''});return o};
   if(locked)return;
   $('#genBtn').onclick=async()=>{
     const b=body('save');if(!Object.values(b.notes).some(x=>x.trim()))return toast('Write a few observations for each policy first.');
+    if(FACT.some(([f])=>!factors[f]))return toast('Select one option for every factor under “Compare the policies”.');
     if($('#fb').value.trim()&&!confirm('Replace the current feedback text?'))return;
     const btn=$('#genBtn'),fb=$('#fb');btn.disabled=true;btn.textContent='Writing…';fb.classList.add('shimmer');
     try{const r=await api(`/api/evals/${id}/generate`,b);fb.value=r.feedback;await api('/api/evals/'+id,body('save'));toast('Feedback written. Read it and edit if needed.')}
