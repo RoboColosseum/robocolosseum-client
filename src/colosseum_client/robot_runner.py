@@ -30,6 +30,10 @@ def protobuf_observation(
     message.state["cartesian_position"].CopyFrom(
         tensor_from_numpy(observation.cartesian_position)
     )
+    for name, value in getattr(observation, "extra_state", {}).items():
+        if name in {"joint_position", "gripper_position", "cartesian_position"}:
+            raise ValueError(f"extra_state must not override the {name} state")
+        message.state[name].CopyFrom(tensor_from_numpy(np.asarray(value)))
     capture_time_ns = time.time_ns()
     for image_id, image in observation.images.items():
         rgb = np.ascontiguousarray(image, dtype=np.uint8)
@@ -54,6 +58,8 @@ def action_chunk(plan: pb.ActionPlan, *, control_step: int, expected_dim: int = 
         raise ProtocolError(f"policy action chunk must have shape (horizon, {expected_dim}), got {actions.shape}")
     if not np.all(np.isfinite(actions)):
         raise ProtocolError("policy action chunk contains non-finite values")
+    if getattr(plan, "done", False) and np.any(actions != 0):
+        raise ProtocolError("a done action plan must contain only zero actions")
     if plan.start_step != control_step:
         raise ProtocolError(
             f"policy action starts at step {plan.start_step}, expected {control_step}"

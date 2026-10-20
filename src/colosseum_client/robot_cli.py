@@ -4,6 +4,7 @@ import argparse
 import asyncio
 from dataclasses import replace
 
+from .navigation import ROVER_TYPE
 from .robot_config import RobotClientConfig
 from .robot_runner import run_robot
 
@@ -20,12 +21,29 @@ def main() -> None:
                         help="Receive and log actions without executing them on the robot")
     for name in ('instruction', 'scene', 'evaluator'):
         parser.add_argument('--' + name)
+    parser.add_argument('--goal-gps', metavar='LAT,LON',
+                        help='Earth Rover Open Track: destination coordinates in degrees')
+    parser.add_argument('--goal-image', metavar='PATH',
+                        help='Earth Rover Open Track: reference photo of the destination')
     args = parser.parse_args()
     config = RobotClientConfig.from_yaml(args.config)
     overrides = {name: getattr(args, name) for name in ('instruction', 'scene', 'evaluator')
                  if getattr(args, name) is not None}
     if overrides:
         config = replace(config, **overrides)
+    if args.goal_gps or args.goal_image:
+        if config.robot_type != ROVER_TYPE:
+            raise SystemExit('--goal-gps and --goal-image apply only to robot_type: earth_rover_mini_plus')
+        settings = dict(config.adapter_config)
+        if args.goal_gps:
+            try:
+                latitude, longitude = (float(value) for value in args.goal_gps.split(','))
+            except ValueError:
+                raise SystemExit('--goal-gps expects LAT,LON in degrees') from None
+            settings['goal_gps'] = [latitude, longitude]
+        if args.goal_image:
+            settings['goal_image'] = args.goal_image
+        config = replace(config, adapter_config=settings)
     if args.inference_only and config.policy_server_url:
         raise SystemExit("policy_server_url requires evaluation mode so Router can assign the model")
     if not args.inference_only:

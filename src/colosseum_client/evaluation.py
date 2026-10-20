@@ -24,6 +24,7 @@ from .diagnostics import read_observation, execute_robot_action_async, close_res
 from .client import ColosseumClient, ProtocolError
 from .recording import TrialRecorder
 from .http_diagnostics import log_http_error
+from .navigation import ROVER_TYPE
 from .robot_runner import action_chunk, protobuf_observation
 
 
@@ -178,6 +179,46 @@ def yes_no(label):
             return choice in {'y', 'yes'}
 
 
+def rover_score(label):
+    """Earth Rover outcome on the V4 0-4 rubric, mapped onto success/partial_success."""
+    print('Navigation rubric: 0 no progress, 1 left the start area toward the goal, 2 substantial progress, '
+          '3 reached the destination without completing, 4 full success (declared done, stopped for the hold '
+          'time, arrived; no collision, boundary violation or human help).')
+    while True:
+        raw = input(f'{label} navigation score (0-4): ').strip()
+        if raw.isdecimal() and 0 <= int(raw) <= 4:
+            score = int(raw)
+            return {'success': score == 4, 'partial_success': score / 4}
+        print('Enter a whole number from 0 to 4.')
+
+
+def rover_goal(config):
+    """Open Track destination from --goal-gps / --goal-image (adapter_config.goal_gps / goal_image)."""
+    settings = config.adapter_config
+    gps, image = settings.get('goal_gps'), settings.get('goal_image')
+    if gps is None and image is None and config.test:
+        gps = (0.0, 0.0)  # Synthetic trials need no real destination.
+    if (gps is None) == (image is None):
+        raise ValueError('Open Track rover trials need exactly one of --goal-gps LAT,LON or --goal-image PATH')
+    if gps is not None:
+        try:
+            latitude, longitude = (float(value) for value in gps)
+        except (TypeError, ValueError):
+            raise ValueError('goal_gps must be latitude,longitude in degrees') from None
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+            raise ValueError('goal_gps must be latitude,longitude in degrees')
+        return {'type': 'gps', 'latitude': latitude, 'longitude': longitude}
+    path = Path(image)
+    with path.open('rb') as source:
+        digest = sha256_stream(source).hex()
+    return {'type': 'image', 'sha256': digest, 'file': path.name}
+
+
+def rover_navigation(config):
+    settings = config.adapter_config
+    return {'timeout_s': int(settings.get('timeout_s', 300)), 'stopped_s': float(settings.get('stopped_s', 2))}
+
+
 async def run_trial(config, assignment, run, path, api, *, robot_factory=make_robot,
                     execute_action=True, confirm_live=None):
     # ZeroRPC/gevent connections must be created and used on the same OS thread.
@@ -233,6 +274,10 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                         print(f'Moved to the start pose configured for {start_pose}.', flush=True)
             if config.test and local_mode:
                 await robot_call(robot.configure_model, client.model)
+            # Navigation adapters read the goal and limits from the Router's task.
+            prepare_task = getattr(robot, 'prepare_for_task', None)
+            if prepare_task is not None:
+                await robot_call(prepare_task, task)
             if robot.action_space_name not in metadata.action_spaces:
                 raise ProtocolError('Assigned policy does not support this robot action space')
             if local_mode:
@@ -255,11 +300,19 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
             print(f'Action execution: {"enabled" if execute_action else "disabled"}.', flush=True)
             actions = None
             chunk_index = 0
+            plan_done = False
+            # Mobile bases run against a wall clock; arms keep their step limit unless the task sets one.
+            navigation = task.get('navigation') or {}
+            timeout_s = navigation.get('timeout_s', 300 if robot.action_space_name == 'base_velocity' else None)
+            deadline = None if timeout_s is None else time.monotonic() + float(timeout_s)
             while step < task['max_steps']:
                 if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0)[0]:
                     sys.stdin.readline()
                     if step > 0:
                         break
+                if deadline is not None and time.monotonic() >= deadline:
+                    print(f'Trial reached its {timeout_s}s navigation timeout.', flush=True)
+                    break
                 started = time.monotonic()
                 current = await robot_call(read_observation, robot, step, 'step_start')
                 captured_at = time.monotonic()
@@ -267,6 +320,7 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                     observation = protobuf_observation(current, instruction=task['instruction'], control_step=step)
                     plan = await client.infer(observation, deadline_ms=config.deadline_ms)
                     actions = action_chunk(plan, control_step=step, expected_dim=robot.action_dim)
+                    plan_done = bool(getattr(plan, 'done', False))
                     chunk_index = 0
                     print(f'Received action chunk at step {step}: {len(actions)} actions (execution {"enabled" if execute_action else "skipped"}).', flush=True)
                 action = actions[chunk_index]
@@ -282,6 +336,9 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                         recorder.add(current, action, captured_at=captured_at)
                 chunk_index += 1
                 step += 1
+                if plan_done:
+                    print('Policy declared the task done; its stop command was executed.', flush=True)
+                    break
                 # Include observation, inference and execution in the control period.
                 await asyncio.sleep(max(0, 1/config.control_hz - (time.monotonic() - started)))
             if recorder is not None:
@@ -401,11 +458,17 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                     raise ValueError('instruction cannot be empty')
                 scene = config.scene or (input('Scene / setup: ').strip() if track == 'open' else '')
                 mode = 'local' if config.policy_server_url else 'remote'
+                request = {'robot_id': config.robot_type, 'track': track,
+                    'instruction': instruction, 'scene': scene, 'evaluator': config.evaluator, 'institution': config.institution.strip(),
+                    'inference_mode': mode, 'test': config.test, 'recording': config.recording, 'max_steps': config.max_trial_steps,
+                    'cameras': list(config.cameras), **({'task_id': task_id} if track == 'fine-tuning' else {})}
+                if config.robot_type == ROVER_TYPE and track == 'open':
+                    # Open Track rover trials name their destination; Fine-tuning tasks registered one.
+                    request['goal'] = rover_goal(config)
+                    request['navigation'] = rover_navigation(config)
+                    request['max_steps'] = request['navigation']['timeout_s'] * config.control_hz
                 try:
-                    assignment = api.request('POST', '/next', {'robot_id': config.robot_type, 'track': track,
-                        'instruction': instruction, 'scene': scene, 'evaluator': config.evaluator, 'institution': config.institution.strip(),
-                        'inference_mode': mode, 'test': config.test, 'recording': config.recording, 'max_steps': config.max_trial_steps,
-                        'cameras': list(config.cameras), **({'task_id': task_id} if track == 'fine-tuning' else {})})
+                    assignment = api.request('POST', '/next', request)
                 except NoAssignment as exc:
                     print(str(exc)); return
             if bool(assignment.get('recording', True)) != config.recording:
@@ -460,7 +523,9 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                 if (run_path / 'recording-disabled.json').exists():
                     raise RuntimeError('This diagnostic run cannot be submitted; restart the client for a new evaluation')
                 if run['side'] not in local['outcomes']:
-                    if track == 'open':
+                    if config.robot_type == ROVER_TYPE:
+                        local['outcomes'][run['side']] = rover_score(run['side'])
+                    elif track == 'open':
                         partial = progress(run['side'])
                         local['outcomes'][run['side']] = {'success': partial == 1.0, 'partial_success': partial}
                     else:
@@ -482,7 +547,8 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                             'institution': assignment.get('institution', config.institution),
                             'scene': assignment.get('scene', config.scene),
                             'evaluator': assignment.get('evaluator', config.evaluator),
-                            'outcome': local['outcomes'][run['side']]})
+                            'outcome': local['outcomes'][run['side']],
+                            **({'goal': task['goal']} if task.get('goal') else {})})
                     print(f'LeRobot dataset saved: {dataset}', flush=True)
             if 'result' not in local:
                 preference = None
