@@ -17,6 +17,8 @@ import ssl
 import time
 from urllib.parse import urlsplit, urlunsplit
 
+import threading
+
 import httpx
 
 from .adapters import make_robot
@@ -150,6 +152,21 @@ class EvalAPI:
         self.client.close()
 
 
+def ask(prompt, options=None):
+    """Operator prompt. The terminal reads stdin; the local operator page (rover_ui) replaces this
+    to show the same question as a form. ``options`` lists the valid answers as values or (value, label)."""
+    return input(prompt)
+
+
+class SessionStopped(RuntimeError):
+    """The operator ended the session while a question was pending."""
+
+
+# Set by the operator page: INTERRUPT ends the running trial, STOP ends the session before the next one.
+INTERRUPT = threading.Event()
+STOP = threading.Event()
+
+
 def save(path, document):
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix('.tmp')
@@ -162,7 +179,7 @@ def save(path, document):
 
 def progress(label):
     while True:
-        raw = input(f'{label} partial success (0–100): ').strip()
+        raw = ask(f'{label} partial success (0–100): ').strip()
         try:
             value = float(raw)
             if 0 <= value <= 100:
@@ -174,7 +191,7 @@ def progress(label):
 
 def yes_no(label):
     while True:
-        choice = input(label + ' (y/n): ').strip().lower()
+        choice = ask(label + ' (y/n): ', options=[('y', 'Yes'), ('n', 'No')]).strip().lower()
         if choice in {'y', 'yes', 'n', 'no'}:
             return choice in {'y', 'yes'}
 
@@ -185,7 +202,7 @@ def rover_score(label):
           '3 reached the destination without completing, 4 full success (declared done, stopped for the hold '
           'time, arrived; no collision, boundary violation or human help).')
     while True:
-        raw = input(f'{label} navigation score (0-4): ').strip()
+        raw = ask(f'{label} navigation score (0-4): ', options=[(str(score), str(score)) for score in range(5)]).strip()
         if raw.isdecimal() and 0 <= int(raw) <= 4:
             score = int(raw)
             return {'success': score == 4, 'partial_success': score / 4}
@@ -198,7 +215,7 @@ def rover_bot(config):
     if config.test or settings.get('link', 'frodobots') != 'frodobots' or settings.get('bot_slug'):
         return config
     while True:
-        slug = input('Bot slug: ').strip()
+        slug = ask('Bot slug: ').strip()
         if slug:
             from dataclasses import replace
             return replace(config, adapter_config={**settings, 'bot_slug': slug})
@@ -228,10 +245,12 @@ def select_rover_mission(config, session):
     if not missions:
         raise NoAssignment(f'{session.bot_slug} has no SDK-enabled active missions; create one in the FrodoBots admin')
     print(f'\nMissions on {session.bot_slug}:')
-    for index, mission in enumerate(missions, 1):
-        print(f"{index}. {mission.get('slug')}  [{mission.get('type')}, {mission.get('checkpoints_count') or 0} checkpoints]  {mission.get('name', '')}")
+    labels = [f"{mission.get('slug')}  [{mission.get('type')}, {mission.get('checkpoints_count') or 0} checkpoints]  {mission.get('name', '')}"
+              for mission in missions]
+    for index, label in enumerate(labels, 1):
+        print(f'{index}. {label}')
     while True:
-        choice = input('Select mission number: ').strip()
+        choice = ask('Select mission number: ', options=[(str(index), label) for index, label in enumerate(labels, 1)]).strip()
         if choice.isdecimal() and 1 <= int(choice) <= len(missions):
             return missions[int(choice) - 1]
         print(f'Enter a number from 1 to {len(missions)}.')
@@ -274,7 +293,7 @@ def select_rover_task(api, config):
     for index, task in enumerate(matching, 1):
         print(f"{index}. {task['instruction']}")
     while True:
-        choice = input('Select task number: ').strip()
+        choice = ask('Select task number: ', options=[(str(index), task['instruction']) for index, task in enumerate(matching, 1)]).strip()
         if choice.isdecimal() and 1 <= int(choice) <= len(matching):
             return matching[int(choice) - 1]['id']
         print(f'Enter a number from 1 to {len(matching)}.')
@@ -407,6 +426,10 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                     sys.stdin.readline()
                     if step > 0:
                         break
+                if INTERRUPT.is_set():
+                    INTERRUPT.clear()
+                    print('Trial interrupted by the operator.', flush=True)
+                    break
                 if deadline is not None and time.monotonic() >= deadline:
                     print(f'Trial reached its {timeout_s}s navigation timeout.', flush=True)
                     break
@@ -511,7 +534,7 @@ def select_task(api, robot, test=False):
     for index, task in enumerate(tasks, 1):
         print(f"{index}. {task['instruction']}")
     while True:
-        choice = input('Select task number: ').strip()
+        choice = ask('Select task number: ', options=[(str(index), task['instruction']) for index, task in enumerate(tasks, 1)]).strip()
         if choice.isdecimal() and 1 <= int(choice) <= len(tasks):
             return tasks[int(choice) - 1]['id']
         print(f'Enter a number from 1 to {len(tasks)}.')
@@ -526,7 +549,7 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
     task_id = None
     try:
         if abort:
-            reason = input('Reason for interrupted evaluation: ').strip()
+            reason = ask('Reason for interrupted evaluation: ').strip()
             if not reason:
                 raise ValueError('A reason is required')
             print(api.request('POST', f'/assignments/{abort}/abort', {'reason': reason}))
@@ -542,10 +565,14 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                 print('Previous incomplete evaluation closed. Starting a new evaluation.')
             if track is None:
                 while track not in {'open', 'fine-tuning'}:
-                    value = input('Evaluation track [1: Open / 2: Fine-tuning]: ').strip().lower()
+                    value = ask('Evaluation track [1: Open / 2: Fine-tuning]: ', options=[('1', 'Open'), ('2', 'Fine-tuning')]).strip().lower()
                     track = {'1': 'open', '2': 'fine-tuning', 'open': 'open', 'fine-tuning': 'fine-tuning'}.get(value)
             assignment = None
         while True:
+            if STOP.is_set() and assignment is None:
+                STOP.clear()
+                print('Session stopped by the operator.', flush=True)
+                return
             if assignment is None:
                 if track == 'fine-tuning' and task_id is None:
                     try:
@@ -553,10 +580,10 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                                    else select_task(api, config.robot_type, config.test))
                     except NoAssignment as exc:
                         print(str(exc)); return
-                instruction = (config.instruction or input('Instruction: ').strip()) if track == 'open' else ''
+                instruction = (config.instruction or ask('Instruction: ').strip()) if track == 'open' else ''
                 if track == 'open' and not instruction.strip():
                     raise ValueError('instruction cannot be empty')
-                scene = config.scene or (input('Scene / setup: ').strip() if track == 'open' else '')
+                scene = config.scene or (ask('Scene / setup: ').strip() if track == 'open' else '')
                 mode = 'local' if config.policy_server_url else 'remote'
                 request = {'robot_id': config.robot_type, 'track': track,
                     'instruction': instruction, 'scene': scene, 'evaluator': config.evaluator, 'institution': config.institution.strip(),
@@ -596,7 +623,8 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                 if run['state'] == 'assigned':
                     if (run_path / 'frames.jsonl').exists():
                         raise RuntimeError('Existing recording found; inspect this interrupted run instead of overwriting it')
-                    input(f"\n{run['side']}: restore the scene to its initial setup, then press Enter to start.")
+                    ask(f"\n{run['side']}: restore the scene to its initial setup, then press Enter to start.",
+                        options=[('', 'Start trial')])
                     options = {'execute_action': execute_action}
                     if assignment.get('inference_mode', 'remote') == 'local' and not config.test:
                         def confirm_live(model, prepared_task):
@@ -654,10 +682,10 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                 preference = None
                 if track == 'open':
                     while preference not in {'A', 'B', 'tie'}:
-                        value = input('Preference (A/B/tie): ').strip()
+                        value = ask('Preference (A/B/tie): ', options=[('A', 'A'), ('B', 'B'), ('tie', 'Tie')]).strip()
                         preference = 'tie' if value.lower() == 'tie' else value.upper()
                 local['result'] = {'outcomes': local['outcomes'], 'preference': preference,
-                    'feedback': input('Feedback (optional): ').strip() if track == 'open' else ''}
+                    'feedback': ask('Feedback (optional): ').strip() if track == 'open' else ''}
                 save(manifest, local)
             api.request('POST', f"/assignments/{assignment['id']}/result", local['result'])
             local['submitted'] = True; save(manifest, local)

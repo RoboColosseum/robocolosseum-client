@@ -114,6 +114,7 @@ class CommandSender(threading.Thread):
 
 class EarthRoverMiniPlusRobot(Robot):
     robot_name = 'Earth Rover Mini+'
+    active = None  # The connected adapter, for the local operator page's camera and telemetry.
     joint_count = 0
     has_gripper = False
     action_dim = 2
@@ -159,6 +160,7 @@ class EarthRoverMiniPlusRobot(Robot):
         self.started = True
         self.sender = CommandSender(self.link, self.ttl_s, self._report_fault)
         self.sender.start()
+        type(self).active = self
 
     def _report_fault(self, exc):
         self._fault = exc
@@ -270,6 +272,8 @@ class EarthRoverMiniPlusRobot(Robot):
         if self.closed:
             return
         self.closed = True
+        if type(self).active is self:
+            type(self).active = None
         if self.sender is not None:
             self.sender.stop_event.set()
             self.sender.wake.set()
