@@ -62,7 +62,7 @@ class FrodobotsSession:
 
     def checkpoints(self, mission_slug):
         """Ordered checkpoints of an SDK-enabled mission: id, sequence, latitude, longitude."""
-        data = self._request('GET', '/sdk/checkpoints_list', params={'bot_slug': self.bot_slug, 'mission_slug': mission_slug})
+        data = self._request('POST', '/sdk/checkpoints_list', json={'bot_slug': self.bot_slug, 'mission_slug': mission_slug})
         return sorted((dict(item) for item in data.get('checkpoints_list') or []), key=lambda item: int(item.get('sequence', 0)))
 
     def start_ride(self, mission_slug=None):

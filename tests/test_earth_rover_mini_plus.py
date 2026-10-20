@@ -337,7 +337,8 @@ def test_frodobots_session_mimics_the_sdk_token_and_ride_calls():
         if request.url.path.endswith('/sdk/missions'):
             assert request.url.params['bot_slug'] == 'frodobot_x'
             return httpx.Response(200, json={'missions': [{'slug': 'loop', 'type': 'checkpoints', 'checkpoints_count': 2}]})
-        assert request.url.path.endswith('/sdk/checkpoints_list') and request.url.params['mission_slug'] == 'loop'
+        assert request.method == 'POST' and request.url.path.endswith('/sdk/checkpoints_list')
+        assert json.loads(request.content) == {'bot_slug': 'frodobot_x', 'mission_slug': 'loop'}
         return httpx.Response(200, json={'checkpoints_list': [{'id': 2, 'sequence': 2, 'latitude': '1.2', 'longitude': '2.2'},
                                                                {'id': 1, 'sequence': 1, 'latitude': '1.1', 'longitude': '2.1'}],
                                          'latest_scanned_checkpoint': 0})
