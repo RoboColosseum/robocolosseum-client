@@ -9,12 +9,12 @@ from .session import DEFAULT_API_URL, FrodobotsSession
 
 class FrodobotsRoverLink:
     def __init__(self, settings, cameras, size):
-        for key in ('sdk_token', 'bot_slug', 'mission_slug'):
+        for key in ('sdk_token', 'bot_slug'):
             if not settings.get(key):
                 raise ValueError(f'adapter_config.{key} is required for the FrodoBots link')
         if settings.get('telemetry', 'rtm') != 'rtm':
             raise ValueError("adapter_config.telemetry: only 'rtm' is valid for trials; 'shadow' is spike-only")
-        self.session = FrodobotsSession(settings['sdk_token'], settings['bot_slug'], settings['mission_slug'],
+        self.session = FrodobotsSession(settings['sdk_token'], settings['bot_slug'], settings.get('mission_slug') or '',
                                         api_url=settings.get('frodobots_api_url', DEFAULT_API_URL))
         self.cameras = list(cameras)
         self.size = size

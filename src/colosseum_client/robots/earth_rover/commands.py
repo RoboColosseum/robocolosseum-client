@@ -13,7 +13,7 @@ import time
 import httpx
 
 REST_BASE = 'https://api.agora.io'
-SEND_TIMEOUT_S = 0.5
+SEND_TIMEOUT_S = 1.0  # Measured round trips: ~160 ms median, 700 ms worst case.
 ACK_TIMEOUT_S = 4.0
 STOP_BUDGET_S = 10.0
 

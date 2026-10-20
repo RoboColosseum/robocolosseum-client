@@ -3,7 +3,9 @@
 Run it on the operator machine with the rover online and an operator watching it:
 
     FRODOBOTS_SDK_TOKEN=... uv run --extra earth-rover python scripts/earth_rover_link_check.py \
-        --bot-slug BOT --mission-slug MISSION [--drive] [--telemetry rtm|shadow] [--seconds 20]
+        --bot-slug BOT [--mission-slug MISSION] [--drive] [--telemetry rtm|shadow] [--seconds 20]
+
+Without --mission-slug it uses the SDK's token-only session (no ride, no platform recording).
 
 Without --drive it only observes (frames, telemetry) and sends a confirmed stop.
 With --drive it sends a slow forward command for one second, then a slow left turn,
@@ -25,7 +27,7 @@ from colosseum_client.robots.earth_rover.session import DEFAULT_API_URL, Frodobo
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--bot-slug', required=True)
-    parser.add_argument('--mission-slug', required=True)
+    parser.add_argument('--mission-slug', default='', help='omit for a token-only session (no ride, no platform recording)')
     parser.add_argument('--api-url', default=DEFAULT_API_URL)
     parser.add_argument('--telemetry', choices=['rtm', 'shadow'], default='rtm')
     parser.add_argument('--seconds', type=float, default=20, help='observation window')

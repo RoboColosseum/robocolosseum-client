@@ -17,7 +17,7 @@ cameras:
   # rear_image: rear                       # Optional; if listed it must arrive every step (and the task must list it)
 adapter_config:
   bot_slug: YOUR_BOT_SLUG
-  mission_slug: YOUR_MISSION_SLUG          # An SDK-enabled open mission with zero checkpoints
+  mission_slug: YOUR_MISSION_SLUG          # An SDK-enabled open mission with zero checkpoints; leave empty for a token-only session (no platform recording)
   frodobots_api_url: https://frodobots-web-api.onrender.com/api/v1
   sdk_token: env:FRODOBOTS_SDK_TOKEN       # Organizer sdk_access_token of a NON-admin account; env:NAME reads the environment
   goal_dir: goals                          # Fine-tuning photo goals: <goal_dir>/<task.goal.file>, checked against the task's sha256

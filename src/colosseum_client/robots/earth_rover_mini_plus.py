@@ -28,6 +28,9 @@ TELEMETRY_MAX_AGE_S = 3.0
 SEND_HZ = 10
 STOP_ATTEMPTS = 3
 STOP_WAIT_S = 15.0
+# A single slow REST call must not end a trial; a sustained outage must.
+MAX_CONSECUTIVE_SEND_FAILURES = 5
+FAULT_AFTER_S = 2.0
 SETTINGS = {'bot_slug', 'mission_slug', 'frodobots_api_url', 'sdk_token', 'goal_dir', 'goal_gps', 'goal_image',
             'command_ttl_s', 'max_linear', 'max_angular', 'link', 'telemetry', 'timeout_s', 'stopped_s',
             'first_frame_timeout_s'}
@@ -57,6 +60,8 @@ class CommandSender(threading.Thread):
         self.wake = threading.Event()
         self.stop_event = threading.Event()
         self.expiries = 0
+        self.failures = 0
+        self.last_success = time.monotonic()
         self._stop_request = None
 
     def set(self, linear, angular):
@@ -97,8 +102,12 @@ class CommandSender(threading.Thread):
                         done.set()
                 else:
                     self.link.send(*command)
+                self.failures = 0
+                self.last_success = time.monotonic()
             except Exception as exc:
-                self.on_fault(exc)
+                self.failures += 1
+                if self.failures >= MAX_CONSECUTIVE_SEND_FAILURES or time.monotonic() - self.last_success > FAULT_AFTER_S:
+                    self.on_fault(exc)
             self.wake.wait(1 / SEND_HZ)
             self.wake.clear()
 

@@ -142,6 +142,20 @@ def test_stale_feeds_and_sender_faults_end_the_trial(tmp_path, monkeypatch):
         robot.get_observation()
     robot.close()
 
+    class FlakyLink(SimulatedRoverLink):
+        """One failed send in five is a transient hiccup, not a fault."""
+        def send(self, linear, angular):
+            if len(self.sent) % 5 == 4:
+                self.sent.append((None, None, threading.get_ident(), time.monotonic()))
+                raise OSError('timeout')
+            super().send(linear, angular)
+    monkeypatch.setattr(rover, 'make_link', lambda settings, cameras, size: FlakyLink(cameras, size))
+    robot = rover.EarthRoverMiniPlusRobot(rover_config(tmp_path))
+    assert wait_until(lambda: len(robot.link.sent) >= 12, 3.0)
+    assert robot._fault is None and robot.sender.failures <= 1
+    robot.get_observation()
+    robot.close()
+
 
 def test_unconfirmed_stop_is_an_error_after_cleanup(tmp_path, monkeypatch):
     monkeypatch.setattr(rover, 'make_link', lambda settings, cameras, size: SimulatedRoverLink(cameras, size, stop_ok=False))
@@ -288,3 +302,29 @@ def test_test_mode_rover_runs_the_synthetic_flow(tmp_path):
     with pytest.raises(ValueError):
         robot.execute(np.zeros(8, dtype=np.float32))
     robot.close()
+
+
+
+def test_frodobots_session_mimics_the_sdk_token_and_ride_calls():
+    import httpx
+    from colosseum_client.robots.earth_rover.session import FrodobotsSession
+    calls = []
+    credentials = {'APP_ID': 'app', 'CHANNEL_NAME': 'ride_bot_frodobot_x', 'USERID': 42, 'RTC_TOKEN': 'rtc', 'RTM_TOKEN': 'rtm',
+                   'BOT_UID': 'frodobot_x', 'BOT_TYPE': 'mini'}
+    def handler(request):
+        calls.append((request.method, request.url.path, json.loads(request.content or b'{}')))
+        assert request.headers['authorization'] == 'Bearer secret'
+        return httpx.Response(200, json=credentials)
+    transport = httpx.MockTransport(handler)
+    session = FrodobotsSession('secret', 'frodobot_x', api_url='https://api.example/api/v1', transport=transport)
+    ride = session.start_ride()
+    assert ride.user_id == 42 and ride.bot_uid == 'frodobot_x' and ride.channel == 'ride_bot_frodobot_x'
+    session.end_ride()
+    assert calls == [('POST', '/api/v1/sdk/token', {'bot_slug': 'frodobot_x'})]
+    with_mission = FrodobotsSession('secret', 'frodobot_x', 'open-mission', api_url='https://api.example/api/v1', transport=transport)
+    with_mission.start_ride()
+    with_mission.end_ride()
+    assert calls[1:] == [('POST', '/api/v1/sdk/start_ride', {'bot_slug': 'frodobot_x', 'mission_slug': 'open-mission'}),
+                         ('POST', '/api/v1/sdk/end_ride', {'bot_slug': 'frodobot_x', 'mission_slug': 'open-mission'})]
+    with pytest.raises(ValueError, match='bot_slug'):
+        FrodobotsSession('secret', '', transport=transport)

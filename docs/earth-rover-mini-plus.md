@@ -44,9 +44,10 @@ uv run colosseum-robot configs/robot.yaml --track open --goal-gps 1.2967,103.776
 uv run colosseum-robot configs/robot.yaml --track open --goal-image goals/courtyard-fountain.jpg
 ```
 
-The ride is acquired through frodobots_web's programmatic ride endpoints with
-the configured `bot_slug` and `mission_slug` and released when the adapter
-closes. Video arrives over the ride's Agora channel (front camera uid 1000,
+The ride is acquired through frodobots_web's programmatic endpoints with the
+configured `bot_slug` and `mission_slug` and released when the adapter closes;
+without a `mission_slug` the client uses the SDK's token-only session
+(`/sdk/token`), which has no ride and no platform-side recording. Video arrives over the ride's Agora channel (front camera uid 1000,
 rear 1001); commands and telemetry are RTM peer messages to and from the rover.
 `scripts/earth_rover_link_check.py` exercises the link without the Router
 (frame age, telemetry rate, command round trip, confirmed stop) and is the

@@ -1,7 +1,10 @@
 """FrodoBots ride session: the backend locks the rover and issues the Agora credentials.
 
-These are frodobots_web's existing programmatic ride endpoints (``/sdk/start_ride``,
-``/sdk/end_ride``), called directly with an organizer ``sdk_access_token``.
+These are frodobots_web's existing programmatic endpoints, called directly with an
+organizer ``sdk_access_token``, exactly as the Earth Rovers SDK does: with a mission,
+``/sdk/start_ride`` opens a recorded ride; without one, ``/sdk/token`` grants the
+bot and its credentials (no ride row, no platform recording). ``/sdk/end_ride``
+releases a ride.
 """
 from __future__ import annotations
 
@@ -31,13 +34,13 @@ class RideCredentials:
 
 
 class FrodobotsSession:
-    def __init__(self, token, bot_slug, mission_slug, *, api_url=DEFAULT_API_URL, timeout=30):
-        if not token or not bot_slug or not mission_slug:
-            raise ValueError('sdk_token, bot_slug and mission_slug are required')
+    def __init__(self, token, bot_slug, mission_slug='', *, api_url=DEFAULT_API_URL, timeout=30, transport=None):
+        if not token or not bot_slug:
+            raise ValueError('sdk_token and bot_slug are required')
         self.bot_slug = bot_slug
-        self.mission_slug = mission_slug
+        self.mission_slug = mission_slug or ''
         self.http = httpx.Client(base_url=api_url.rstrip('/'), timeout=timeout, trust_env=False,
-                                 headers={'Authorization': f'Bearer {token}'})
+                                 headers={'Authorization': f'Bearer {token}'}, transport=transport)
         self.credentials = None
 
     def _request(self, method, path, **kwargs):
@@ -53,8 +56,15 @@ class FrodobotsSession:
         return response.json()
 
     def start_ride(self):
-        """Acquire the rover for this account; a repeated call rejoins the same active ride."""
-        data = self._request('POST', '/sdk/start_ride', json={'bot_slug': self.bot_slug, 'mission_slug': self.mission_slug})
+        """Acquire the rover for this account; a repeated call rejoins the same active ride.
+
+        Without a mission this is the SDK's token-only session: the backend still
+        checks that nobody else holds the bot and points the rover at our channel.
+        """
+        if self.mission_slug:
+            data = self._request('POST', '/sdk/start_ride', json={'bot_slug': self.bot_slug, 'mission_slug': self.mission_slug})
+        else:
+            data = self._request('POST', '/sdk/token', json={'bot_slug': self.bot_slug})
         missing = [key for key in REQUIRED_KEYS if not data.get(key)]
         if missing:
             raise RuntimeError('FrodoBots start_ride response lacks ' + ', '.join(missing))
@@ -65,7 +75,10 @@ class FrodobotsSession:
         return self.credentials
 
     def end_ride(self):
-        """Release the rover. A missing active ride (404) counts as already ended."""
+        """Release the rover. A missing active ride (404) counts as already ended; token-only sessions have no ride."""
+        if not self.mission_slug:
+            self.credentials = None
+            return
         try:
             response = self.http.post('/sdk/end_ride', json={'bot_slug': self.bot_slug, 'mission_slug': self.mission_slug})
             if response.is_error and response.status_code != 404:
