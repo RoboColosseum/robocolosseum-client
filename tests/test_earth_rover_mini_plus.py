@@ -426,3 +426,14 @@ def test_fine_tuning_task_is_matched_to_the_chosen_mission(tmp_path, monkeypatch
     assert e.select_rover_task(API(), rover_config(tmp_path, link='frodobots', mission_slug='plaza')) == 'mission-plaza'
     with pytest.raises(e.NoAssignment, match='courtyard-loop'):
         e.select_rover_task(API(), rover_config(tmp_path, link='frodobots', mission_slug='courtyard-loop'))
+
+
+
+def test_bot_slug_is_asked_for_when_not_configured(tmp_path, monkeypatch):
+    answers = iter(['', 'frodobot_x'])
+    monkeypatch.setattr('builtins.input', lambda prompt: next(answers))
+    config = e.rover_bot(rover_config(tmp_path, link='frodobots', bot_slug=''))
+    assert config.adapter_config['bot_slug'] == 'frodobot_x'
+    configured = rover_config(tmp_path, link='frodobots', bot_slug='frodobot_y')
+    assert e.rover_bot(configured) is configured
+    assert e.rover_bot(rover_config(tmp_path)) is not None  # simulated link: no prompt

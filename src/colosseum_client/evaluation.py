@@ -192,6 +192,19 @@ def rover_score(label):
         print('Enter a whole number from 0 to 4.')
 
 
+def rover_bot(config):
+    """The rover to connect: adapter_config.bot_slug, --bot, or a prompt, like the SDK's BOT_SLUG."""
+    settings = config.adapter_config
+    if config.test or settings.get('link', 'frodobots') != 'frodobots' or settings.get('bot_slug'):
+        return config
+    while True:
+        slug = input('Bot slug: ').strip()
+        if slug:
+            from dataclasses import replace
+            return replace(config, adapter_config={**settings, 'bot_slug': slug})
+        print('Enter the slug of the Earth Rover to connect.')
+
+
 def rover_session(config):
     """A FrodoBots backend session for mission lookup, or None when the trial does not ride a real rover."""
     settings = config.adapter_config
@@ -506,6 +519,8 @@ def select_task(api, robot, test=False):
 
 def run_evaluation(config, *, track=None, resume=None, abort=None, execute_action=True):
     track = track or config.track or None
+    if config.robot_type == ROVER_TYPE and not (resume or abort):
+        config = rover_bot(config)
     api = EvalAPI(config)
     root = Path(config.evaluation_dir).resolve()
     task_id = None

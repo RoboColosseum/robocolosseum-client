@@ -25,6 +25,8 @@ def main() -> None:
                         help='Earth Rover Open Track: destination coordinates in degrees')
     parser.add_argument('--goal-image', metavar='PATH',
                         help='Earth Rover Open Track: reference photo of the destination')
+    parser.add_argument('--bot', metavar='SLUG',
+                        help='Earth Rover: the FrodoBots bot to connect (otherwise adapter_config.bot_slug or a prompt)')
     parser.add_argument('--mission', metavar='SLUG',
                         help="Earth Rover: the bot's FrodoBots mission to ride on (otherwise chosen from a list)")
     parser.add_argument('--checkpoint', type=int, metavar='N',
@@ -35,10 +37,12 @@ def main() -> None:
                  if getattr(args, name) is not None}
     if overrides:
         config = replace(config, **overrides)
-    if args.goal_gps or args.goal_image or args.mission or args.checkpoint:
+    if args.goal_gps or args.goal_image or args.bot or args.mission or args.checkpoint:
         if config.robot_type != ROVER_TYPE:
-            raise SystemExit('--goal-gps, --goal-image, --mission and --checkpoint apply only to robot_type: earth_rover_mini_plus')
+            raise SystemExit('--bot, --goal-gps, --goal-image, --mission and --checkpoint apply only to robot_type: earth_rover_mini_plus')
         settings = dict(config.adapter_config)
+        if args.bot:
+            settings['bot_slug'] = args.bot
         if args.mission:
             settings['mission_slug'] = args.mission
         if args.checkpoint:
