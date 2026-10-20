@@ -17,10 +17,16 @@ trial, and the recording is exported and uploaded as a LeRobot dataset.
 | Photo goal | a `goal_image` sensor (the reference photo); no GPS is sent |
 | Completion | the policy sends a zero chunk with `done=True`; the trial also ends at `navigation.timeout_s` (default 300 s) or when the operator presses Enter |
 
-Goals come from the Router's task: Fine-tuning tasks register them, Open Track
-trials pass `--goal-gps LAT,LON` or `--goal-image PATH` on the command line.
-Photo goals are kept on the operator laptop (`adapter_config.goal_dir`) and
-checked against the task's sha256 before the trial starts.
+Goals come from the bot's FrodoBots missions, the way the SDK works: the
+client lists the bot's SDK-enabled active missions, the operator picks one
+(or passes `--mission SLUG`), and the destination is one of its checkpoints
+(the last, or `--checkpoint N`). The ride is opened on that mission, so it is
+a normal recorded ride. Fine-tuning tasks are registered from a mission
+(`goal.mission_slug` ties them together; the client matches the task to the
+chosen mission); Open Track trials send the checkpoint goal directly.
+`--goal-gps LAT,LON` / `--goal-image PATH` remain for destinations that are
+not a mission checkpoint, such as photo goals, which are kept on the operator
+laptop (`adapter_config.goal_dir`) and checked against the task's sha256.
 
 ## Safety
 
@@ -39,15 +45,16 @@ the ride is left open for the operator to check the rover.
 uv sync --extra earth-rover            # Agora RTC/RTM client; Linux x86_64 for real runs, macOS 13+ for development
 cp configs/robot.earth_rover_mini_plus.yaml.example configs/robot.yaml
 export FRODOBOTS_SDK_TOKEN=...         # organizer sdk_access_token of a non-admin account
-uv run colosseum-robot configs/robot.yaml --no-execute-action      # first physical run: observe only
-uv run colosseum-robot configs/robot.yaml --track open --goal-gps 1.2967,103.7764
+uv run colosseum-robot configs/robot.yaml --no-execute-action      # first physical run: observe only; lists the bot's missions
+uv run colosseum-robot configs/robot.yaml --mission courtyard-loop --checkpoint 3
 uv run colosseum-robot configs/robot.yaml --track open --goal-image goals/courtyard-fountain.jpg
 ```
 
-The ride is acquired through frodobots_web's programmatic endpoints with the
-configured `bot_slug` and `mission_slug` and released when the adapter closes;
-without a `mission_slug` the client uses the SDK's token-only session
-(`/sdk/token`), which has no ride and no platform-side recording. Video arrives over the ride's Agora channel (front camera uid 1000,
+The ride is acquired through frodobots_web's programmatic endpoints
+(`/sdk/missions`, `/sdk/checkpoints_list`, `/sdk/start_ride`, `/sdk/end_ride`)
+with the configured `bot_slug` and the chosen mission, and released when the
+adapter closes; a trial without a mission falls back to the SDK's token-only
+session (`/sdk/token`), which has no ride and no platform-side recording. Video arrives over the ride's Agora channel (front camera uid 1000,
 rear 1001); commands and telemetry are RTM peer messages to and from the rover.
 `scripts/earth_rover_link_check.py` exercises the link without the Router
 (frame age, telemetry rate, command round trip, confirmed stop) and is the

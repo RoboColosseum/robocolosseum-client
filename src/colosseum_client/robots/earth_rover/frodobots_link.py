@@ -24,11 +24,11 @@ class FrodobotsRoverLink:
         self.telemetry = None
         self.sender = None
 
-    def start(self):
+    def start(self, mission_slug=None):
         from .commands import RtmRestSender
         from .telemetry import RtmTelemetry
         from .video import AgoraVideo
-        self.credentials = self.session.start_ride()
+        self.credentials = self.session.start_ride(mission_slug)
         self.sender = RtmRestSender(self.credentials)
         self.video = AgoraVideo(self.credentials, self.cameras)
         self.video.start()

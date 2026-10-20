@@ -55,12 +55,24 @@ class FrodobotsSession:
             raise RuntimeError(f'FrodoBots {path} failed ({response.status_code})' + (f': {detail}' if detail else ''))
         return response.json()
 
-    def start_ride(self):
+    def missions(self):
+        """The bot's SDK-enabled active missions, as the SDK's /missions lists them."""
+        data = self._request('GET', '/sdk/missions', params={'bot_slug': self.bot_slug})
+        return list(data.get('missions') or [])
+
+    def checkpoints(self, mission_slug):
+        """Ordered checkpoints of an SDK-enabled mission: id, sequence, latitude, longitude."""
+        data = self._request('GET', '/sdk/checkpoints_list', params={'bot_slug': self.bot_slug, 'mission_slug': mission_slug})
+        return sorted((dict(item) for item in data.get('checkpoints_list') or []), key=lambda item: int(item.get('sequence', 0)))
+
+    def start_ride(self, mission_slug=None):
         """Acquire the rover for this account; a repeated call rejoins the same active ride.
 
         Without a mission this is the SDK's token-only session: the backend still
         checks that nobody else holds the bot and points the rover at our channel.
         """
+        if mission_slug is not None:
+            self.mission_slug = mission_slug or ''
         if self.mission_slug:
             data = self._request('POST', '/sdk/start_ride', json={'bot_slug': self.bot_slug, 'mission_slug': self.mission_slug})
         else:

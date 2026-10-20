@@ -31,7 +31,7 @@ STOP_WAIT_S = 15.0
 # A single slow REST call must not end a trial; a sustained outage must.
 MAX_CONSECUTIVE_SEND_FAILURES = 5
 FAULT_AFTER_S = 2.0
-SETTINGS = {'bot_slug', 'mission_slug', 'frodobots_api_url', 'sdk_token', 'goal_dir', 'goal_gps', 'goal_image',
+SETTINGS = {'bot_slug', 'mission_slug', 'checkpoint', 'frodobots_api_url', 'sdk_token', 'goal_dir', 'goal_gps', 'goal_image',
             'command_ttl_s', 'max_linear', 'max_angular', 'link', 'telemetry', 'timeout_s', 'stopped_s',
             'first_frame_timeout_s'}
 
@@ -147,17 +147,18 @@ class EarthRoverMiniPlusRobot(Robot):
         self.closed = False
         self.sender = None
         settings['sdk_token'] = resolve_secret(settings.get('sdk_token'))
+        self.mission_slug = settings.get('mission_slug') or ''
         self.link = make_link(settings, cameras=self.cameras, size=self.size)
-        try:
-            self.link.start()
-            self.sender = CommandSender(self.link, self.ttl_s, self._report_fault)
-            self.sender.start()
-        except BaseException:
-            try:
-                self.close()
-            except Exception:
-                pass
-            raise
+        self.started = False
+
+    def _ensure_started(self, mission_slug=None):
+        """Connect once: on the trial's mission when the task names one, else the configured or token-only session."""
+        if self.started:
+            return
+        self.link.start(mission_slug or self.mission_slug or None)
+        self.started = True
+        self.sender = CommandSender(self.link, self.ttl_s, self._report_fault)
+        self.sender.start()
 
     def _report_fault(self, exc):
         self._fault = exc
@@ -173,6 +174,7 @@ class EarthRoverMiniPlusRobot(Robot):
             raise RuntimeError('Earth Rover adapter is closed')
         if self._fault is not None:
             raise RuntimeError(f'Earth Rover command sender failed ({type(self._fault).__name__})')
+        self._ensure_started()
         now = time.monotonic()
         frames = self.link.latest_frames()
         images = {}
@@ -213,6 +215,7 @@ class EarthRoverMiniPlusRobot(Robot):
             if self._clipped == 1:
                 print('Earth Rover action outside [-1, 1] was clipped.', flush=True)
         linear, angular = clipped * np.asarray(self.limits, dtype=np.float64)
+        self._ensure_started()
         self.sender.set(float(linear), float(angular))
 
     def prepare_for_task(self, task):
@@ -245,6 +248,8 @@ class EarthRoverMiniPlusRobot(Robot):
             self._goal_gps = None
         else:
             print('Warning: this task has no navigation goal; the policy receives none.', flush=True)
+        # The ride starts here, on the mission the task came from, like the SDK's start-mission.
+        self._ensure_started(goal.get('mission_slug'))
 
     def _speed(self):
         telemetry = self.link.latest_telemetry()
@@ -252,6 +257,8 @@ class EarthRoverMiniPlusRobot(Robot):
 
     async def finish_trial(self, robot_call):
         """Confirmed stop, then the hold the rubric asks for; the operator sees whether the rover stayed still."""
+        if self.sender is None:
+            return
         confirmed = await robot_call(self.sender.confirmed_stop)
         await asyncio.sleep(self.stopped_s)
         speed = await robot_call(self._speed)
@@ -267,9 +274,9 @@ class EarthRoverMiniPlusRobot(Robot):
             self.sender.stop_event.set()
             self.sender.wake.set()
             self.sender.join(timeout=5)
-        confirmed = False
+        confirmed = not self.started  # Nothing was ever sent to a rover that was never connected.
         try:
-            for _ in range(STOP_ATTEMPTS):
+            for _ in range(STOP_ATTEMPTS if self.started else 0):
                 if self.link.stop(confirm=True):
                     confirmed = True
                     break

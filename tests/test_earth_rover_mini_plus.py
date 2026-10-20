@@ -137,6 +137,7 @@ def test_stale_feeds_and_sender_faults_end_the_trial(tmp_path, monkeypatch):
             raise OSError('network down')
     monkeypatch.setattr(rover, 'make_link', lambda settings, cameras, size: FailingLink(cameras, size))
     robot = rover.EarthRoverMiniPlusRobot(rover_config(tmp_path))
+    robot.get_observation()  # starts the link and the sender
     assert wait_until(lambda: robot._fault is not None)
     with pytest.raises(RuntimeError, match='OSError'):
         robot.get_observation()
@@ -151,6 +152,7 @@ def test_stale_feeds_and_sender_faults_end_the_trial(tmp_path, monkeypatch):
             super().send(linear, angular)
     monkeypatch.setattr(rover, 'make_link', lambda settings, cameras, size: FlakyLink(cameras, size))
     robot = rover.EarthRoverMiniPlusRobot(rover_config(tmp_path))
+    robot.get_observation()
     assert wait_until(lambda: len(robot.link.sent) >= 12, 3.0)
     assert robot._fault is None and robot.sender.failures <= 1
     robot.get_observation()
@@ -160,6 +162,7 @@ def test_stale_feeds_and_sender_faults_end_the_trial(tmp_path, monkeypatch):
 def test_unconfirmed_stop_is_an_error_after_cleanup(tmp_path, monkeypatch):
     monkeypatch.setattr(rover, 'make_link', lambda settings, cameras, size: SimulatedRoverLink(cameras, size, stop_ok=False))
     robot = rover.EarthRoverMiniPlusRobot(rover_config(tmp_path))
+    robot.get_observation()
     with pytest.raises(RuntimeError, match='not confirmed'):
         robot.close()
     assert robot.link.closed and robot.link.stops == rover.STOP_ATTEMPTS
@@ -173,6 +176,7 @@ def test_finish_trial_requests_a_confirmed_stop_through_the_sender(robot):
             calls.append(function.__name__)
             return function(*args)
         robot.stopped_s = 0.01
+        robot.get_observation()
         await robot.finish_trial(robot_call)
         return calls
     assert asyncio.run(run()) == ['confirmed_stop', '_speed']
@@ -328,3 +332,96 @@ def test_frodobots_session_mimics_the_sdk_token_and_ride_calls():
                          ('POST', '/api/v1/sdk/end_ride', {'bot_slug': 'frodobot_x', 'mission_slug': 'open-mission'})]
     with pytest.raises(ValueError, match='bot_slug'):
         FrodobotsSession('secret', '', transport=transport)
+
+    def lookup(request):
+        if request.url.path.endswith('/sdk/missions'):
+            assert request.url.params['bot_slug'] == 'frodobot_x'
+            return httpx.Response(200, json={'missions': [{'slug': 'loop', 'type': 'checkpoints', 'checkpoints_count': 2}]})
+        assert request.url.path.endswith('/sdk/checkpoints_list') and request.url.params['mission_slug'] == 'loop'
+        return httpx.Response(200, json={'checkpoints_list': [{'id': 2, 'sequence': 2, 'latitude': '1.2', 'longitude': '2.2'},
+                                                               {'id': 1, 'sequence': 1, 'latitude': '1.1', 'longitude': '2.1'}],
+                                         'latest_scanned_checkpoint': 0})
+    lookups = FrodobotsSession('secret', 'frodobot_x', api_url='https://api.example/api/v1', transport=httpx.MockTransport(lookup))
+    assert lookups.missions()[0]['slug'] == 'loop'
+    assert [item['sequence'] for item in lookups.checkpoints('loop')] == [1, 2]
+    ride = FrodobotsSession('secret', 'frodobot_x', api_url='https://api.example/api/v1', transport=transport)
+    ride.start_ride('loop')
+    assert calls[-1] == ('POST', '/api/v1/sdk/start_ride', {'bot_slug': 'frodobot_x', 'mission_slug': 'loop'})
+
+
+
+def test_link_starts_from_the_task_mission_like_the_sdk(tmp_path):
+    robot = rover.EarthRoverMiniPlusRobot(rover_config(tmp_path))
+    assert not robot.started and robot.sender is None and not robot.link.started
+    robot.close()  # never connected: nothing to stop, no error
+    assert robot.link.stops == 0
+
+    robot = rover.EarthRoverMiniPlusRobot(rover_config(tmp_path))
+    robot.prepare_for_task({'goal': {'type': 'gps', 'latitude': 1.0, 'longitude': 2.0, 'mission_slug': 'courtyard-loop', 'checkpoint': 3}})
+    assert robot.started and robot.link.mission_slug == 'courtyard-loop'
+    robot.close()
+
+    robot = rover.EarthRoverMiniPlusRobot(rover_config(tmp_path, mission_slug='configured-mission'))
+    robot.get_observation()  # no task goal: the configured mission, like MISSION_SLUG in the SDK
+    assert robot.link.mission_slug == 'configured-mission'
+    robot.close()
+
+    robot = rover.EarthRoverMiniPlusRobot(rover_config(tmp_path))
+    robot.get_observation()  # neither: token-only session
+    assert robot.link.mission_slug is None
+    robot.close()
+
+
+class FakeSession:
+    bot_slug = 'frodobot_x'
+
+    def __init__(self):
+        self.closed = False
+        self.mission_list = [
+            {'slug': 'courtyard-loop', 'name': 'Courtyard loop', 'type': 'checkpoints', 'checkpoints_count': 3},
+            {'slug': 'plaza', 'name': 'Plaza', 'type': 'checkpoints', 'checkpoints_count': 1},
+        ]
+
+    def missions(self):
+        return list(self.mission_list)
+
+    def checkpoints(self, slug):
+        return {'courtyard-loop': [{'id': 1, 'sequence': 1, 'latitude': '1.1', 'longitude': '2.1'},
+                                   {'id': 2, 'sequence': 2, 'latitude': '1.2', 'longitude': '2.2'},
+                                   {'id': 3, 'sequence': 3, 'latitude': '1.3', 'longitude': '2.3'}],
+                'plaza': [{'id': 9, 'sequence': 1, 'latitude': '5.0', 'longitude': '6.0'}]}[slug]
+
+    def close(self):
+        self.closed = True
+
+
+def test_open_track_goal_comes_from_the_chosen_mission(tmp_path, monkeypatch):
+    session = FakeSession()
+    monkeypatch.setattr(e, 'rover_session', lambda config: session)
+    answers = iter(['x', '9', '1'])
+    monkeypatch.setattr('builtins.input', lambda prompt: next(answers))
+    config = rover_config(tmp_path, link='frodobots')
+    goal = e.rover_goal(config)
+    assert goal == {'type': 'gps', 'latitude': 1.3, 'longitude': 2.3, 'mission_slug': 'courtyard-loop', 'checkpoint': 3}
+    assert session.closed
+    assert e.rover_goal(rover_config(tmp_path, link='frodobots', mission_slug='courtyard-loop', checkpoint=2)) == {
+        'type': 'gps', 'latitude': 1.2, 'longitude': 2.2, 'mission_slug': 'courtyard-loop', 'checkpoint': 2}
+    with pytest.raises(ValueError, match='not an SDK-enabled'):
+        e.rover_goal(rover_config(tmp_path, link='frodobots', mission_slug='unknown'))
+    # Manual goals keep working and carry the configured mission for the ride.
+    manual = e.rover_goal(rover_config(tmp_path, link='frodobots', goal_gps=[3.0, 4.0], mission_slug='plaza'))
+    assert manual == {'type': 'gps', 'latitude': 3.0, 'longitude': 4.0, 'mission_slug': 'plaza'}
+
+
+def test_fine_tuning_task_is_matched_to_the_chosen_mission(tmp_path, monkeypatch):
+    session = FakeSession()
+    monkeypatch.setattr(e, 'rover_session', lambda config: session)
+    class API:
+        def request(self, method, path):
+            assert method == 'GET' and path.startswith('/tasks?robot_id=earth_rover_mini_plus')
+            return {'tasks': [{'id': 'mission-plaza', 'instruction': 'Go to the plaza', 'goal': {'type': 'gps', 'mission_slug': 'plaza'}},
+                              {'id': 'other', 'instruction': 'Other', 'goal': {'type': 'gps', 'mission_slug': 'elsewhere'}}]}
+    monkeypatch.setattr('builtins.input', lambda prompt: pytest.fail('no prompt expected with a configured mission'))
+    assert e.select_rover_task(API(), rover_config(tmp_path, link='frodobots', mission_slug='plaza')) == 'mission-plaza'
+    with pytest.raises(e.NoAssignment, match='courtyard-loop'):
+        e.select_rover_task(API(), rover_config(tmp_path, link='frodobots', mission_slug='courtyard-loop'))

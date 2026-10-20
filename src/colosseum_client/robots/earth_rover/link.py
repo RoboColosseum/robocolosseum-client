@@ -20,7 +20,8 @@ class RoverLink(Protocol):
     ``start`` and ``close`` run on the robot worker thread.
     """
 
-    def start(self) -> None: ...
+    def start(self, mission_slug: str | None = None) -> None:
+        """Connect to the rover; with a mission the session is a recorded ride on it."""
 
     def latest_frames(self) -> dict[str, tuple[np.ndarray, float]]:
         """Camera name → (RGB uint8 HxWx3, monotonic time the frame was received)."""
@@ -56,8 +57,9 @@ class SimulatedRoverLink:
         self._updated = time.monotonic()
         self._frame = 0
 
-    def start(self):
+    def start(self, mission_slug=None):
         self.started = True
+        self.mission_slug = mission_slug
         self._updated = time.monotonic()
 
     def _integrate(self, linear, angular):

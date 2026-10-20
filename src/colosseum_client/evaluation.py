@@ -192,14 +192,98 @@ def rover_score(label):
         print('Enter a whole number from 0 to 4.')
 
 
+def rover_session(config):
+    """A FrodoBots backend session for mission lookup, or None when the trial does not ride a real rover."""
+    settings = config.adapter_config
+    if config.test or settings.get('link', 'frodobots') != 'frodobots':
+        return None
+    from .robots.earth_rover.session import DEFAULT_API_URL, FrodobotsSession
+    from .robots.earth_rover_mini_plus import resolve_secret
+    return FrodobotsSession(resolve_secret(settings.get('sdk_token')), settings.get('bot_slug'),
+                            api_url=settings.get('frodobots_api_url', DEFAULT_API_URL))
+
+
+def select_rover_mission(config, session):
+    """The bot's mission, like the SDK's start-mission: a configured slug, or a prompt over the bot's SDK-enabled missions."""
+    missions = session.missions()
+    wanted = config.adapter_config.get('mission_slug')
+    if wanted:
+        mission = next((mission for mission in missions if mission.get('slug') == wanted), None)
+        if mission is None:
+            raise ValueError(f'{wanted} is not an SDK-enabled active mission of {session.bot_slug}')
+        return mission
+    if not missions:
+        raise NoAssignment(f'{session.bot_slug} has no SDK-enabled active missions; create one in the FrodoBots admin')
+    print(f'\nMissions on {session.bot_slug}:')
+    for index, mission in enumerate(missions, 1):
+        print(f"{index}. {mission.get('slug')}  [{mission.get('type')}, {mission.get('checkpoints_count') or 0} checkpoints]  {mission.get('name', '')}")
+    while True:
+        choice = input('Select mission number: ').strip()
+        if choice.isdecimal() and 1 <= int(choice) <= len(missions):
+            return missions[int(choice) - 1]
+        print(f'Enter a number from 1 to {len(missions)}.')
+
+
+def mission_goal(session, mission, checkpoint=None):
+    """The destination is one of the mission's checkpoints: the last one unless adapter_config.checkpoint names another."""
+    checkpoints = session.checkpoints(mission['slug'])
+    if not checkpoints:
+        raise ValueError(f"Mission {mission['slug']} has no checkpoints; use --goal-gps or --goal-image instead")
+    if checkpoint is None:
+        target = checkpoints[-1]
+    else:
+        target = next((item for item in checkpoints if int(item.get('sequence', 0)) == int(checkpoint)), None)
+        if target is None:
+            raise ValueError(f"Mission {mission['slug']} has no checkpoint {checkpoint}")
+    return {'type': 'gps', 'latitude': float(target['latitude']), 'longitude': float(target['longitude']),
+            'mission_slug': mission['slug'], 'checkpoint': int(target.get('sequence', len(checkpoints)))}
+
+
+def select_rover_task(api, config):
+    """Fine-tuning: the registered task for the chosen mission (prompting only among tasks of that mission)."""
+    session = rover_session(config)
+    settings = config.adapter_config
+    if session is None or settings.get('goal_gps') is not None or settings.get('goal_image') is not None:
+        return select_task(api, config.robot_type, config.test)
+    try:
+        mission = select_rover_mission(config, session)
+    finally:
+        session.close()
+    tasks = api.request('GET', '/tasks?robot_id=' + quote(config.robot_type, safe='') + ('&test=true' if config.test else ''))['tasks']
+    matching = [task for task in tasks if (task.get('goal') or {}).get('mission_slug') == mission['slug']]
+    if not matching:
+        raise NoAssignment(f"No Fine-tuning task is registered for mission {mission['slug']} "
+                           f"(register it from its checkpoints, e.g. register-mission-task.sh {mission['slug']})")
+    if len(matching) == 1:
+        print(f"Task for mission {mission['slug']}: {matching[0]['instruction']}")
+        return matching[0]['id']
+    print(f"\nTasks for mission {mission['slug']}:")
+    for index, task in enumerate(matching, 1):
+        print(f"{index}. {task['instruction']}")
+    while True:
+        choice = input('Select task number: ').strip()
+        if choice.isdecimal() and 1 <= int(choice) <= len(matching):
+            return matching[int(choice) - 1]['id']
+        print(f'Enter a number from 1 to {len(matching)}.')
+
+
 def rover_goal(config):
-    """Open Track destination from --goal-gps / --goal-image (adapter_config.goal_gps / goal_image)."""
+    """Open Track destination: the chosen mission's checkpoint, or --goal-gps / --goal-image when given."""
     settings = config.adapter_config
     gps, image = settings.get('goal_gps'), settings.get('goal_image')
     if gps is None and image is None and config.test:
         gps = (0.0, 0.0)  # Synthetic trials need no real destination.
-    if (gps is None) == (image is None):
-        raise ValueError('Open Track rover trials need exactly one of --goal-gps LAT,LON or --goal-image PATH')
+    if gps is None and image is None:
+        session = rover_session(config)
+        if session is None:
+            raise ValueError('Open Track rover trials need --goal-gps LAT,LON or --goal-image PATH without a FrodoBots session')
+        try:
+            return mission_goal(session, select_rover_mission(config, session), settings.get('checkpoint'))
+        finally:
+            session.close()
+    if gps is not None and image is not None:
+        raise ValueError('Open Track rover trials take one of --goal-gps LAT,LON or --goal-image PATH, not both')
+    mission = {'mission_slug': settings['mission_slug']} if settings.get('mission_slug') else {}
     if gps is not None:
         try:
             latitude, longitude = (float(value) for value in gps)
@@ -207,11 +291,11 @@ def rover_goal(config):
             raise ValueError('goal_gps must be latitude,longitude in degrees') from None
         if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
             raise ValueError('goal_gps must be latitude,longitude in degrees')
-        return {'type': 'gps', 'latitude': latitude, 'longitude': longitude}
+        return {'type': 'gps', 'latitude': latitude, 'longitude': longitude, **mission}
     path = Path(image)
     with path.open('rb') as source:
         digest = sha256_stream(source).hex()
-    return {'type': 'image', 'sha256': digest, 'file': path.name}
+    return {'type': 'image', 'sha256': digest, 'file': path.name, **mission}
 
 
 def rover_navigation(config):
@@ -450,7 +534,8 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
             if assignment is None:
                 if track == 'fine-tuning' and task_id is None:
                     try:
-                        task_id = select_task(api, config.robot_type, config.test)
+                        task_id = (select_rover_task(api, config) if config.robot_type == ROVER_TYPE
+                                   else select_task(api, config.robot_type, config.test))
                     except NoAssignment as exc:
                         print(str(exc)); return
                 instruction = (config.instruction or input('Instruction: ').strip()) if track == 'open' else ''
