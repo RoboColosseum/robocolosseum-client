@@ -1,6 +1,6 @@
 """One-window YAM eval station: setup checks, live A/B recording, then review and submit.
 
-  .venv/bin/python scripts/eval_gui.py --config configs/robot.yam-eef-llm.yaml
+  .venv/bin/python scripts/eval_gui.py --config configs/robot.yam-joint-llm.yaml
   open http://127.0.0.1:8770
 
 Needs the gui extra (uv pip install --python .venv/bin/python -e '.[gui]').
@@ -1031,9 +1031,9 @@ def shutdown():
 def main():
     global ARGS, CONFIG, CLAUDE_ENV
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--config', default=str(CLIENT / 'configs/robot.yam-eef-llm.yaml'))
+    p.add_argument('--config', default=str(CLIENT / 'configs/robot.yam-joint-llm.yaml'))
     p.add_argument('--server-dir', type=Path, default=Path.home() / 'colosseum-policy-server')
-    p.add_argument('--server-config', default='local/local-runtime-yam-agent-local.yaml',
+    p.add_argument('--server-config', default='local/local-runtime-yam-agent-joint.yaml',
                    help='Policy Server config, relative to --server-dir')
     p.add_argument('--llm-keys', type=Path, default=CLIENT / 'local/llm-keys.env')
     p.add_argument('--claude-env', type=Path, default=CLIENT / 'local/claude-account.env',

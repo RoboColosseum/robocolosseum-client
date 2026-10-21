@@ -1,6 +1,6 @@
 """Record one Router A/B eval WITHOUT scoring or uploading anything; review it later in scripts/review_evals.py.
 
-  .venv/bin/python scripts/record_evals.py configs/robot.yam-eef-llm.yaml --scene "..." [--instruction "..."]
+  .venv/bin/python scripts/record_evals.py configs/robot.yam-joint-llm.yaml --scene "..." [--instruction "..."]
 
 Same flow as colosseum-robot (Router assignment, A runs, reset, B runs), but it stops before the score prompts:
 no scores, preference, feedback, videos or datasets are sent. The Router only has the assignment

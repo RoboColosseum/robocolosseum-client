@@ -1,6 +1,6 @@
 """Local web page to review recorded evals, edit scores/feedback, then Submit or Discard each one.
 
-  .venv/bin/python scripts/review_evals.py --config configs/robot.yam-eef-llm.yaml [--port 8765]
+  .venv/bin/python scripts/review_evals.py --config configs/robot.yam-joint-llm.yaml [--port 8765]
   open http://127.0.0.1:8765
 
 Viewing and "Save locally" only touch local files. Only the Submit and Discard buttons contact the Router:
