@@ -36,6 +36,8 @@ MANUAL_HZ = 10
 MANUAL_TTL_S = 0.5  # the page streams a held key at 10 Hz; silence means the page is gone
 HALT_WAIT_S = 15.0
 STATIC = Path(__file__).parent / 'rover_ui_static'
+VENDOR = Path(__file__).parent / 'robots' / 'earth_rover' / 'vendor'  # the SDK's Agora web client, shared with the link
+STATIC_ROOTS = {'vendor': VENDOR}
 STATIC_TYPES = {'.js': 'application/javascript', '.css': 'text/css', '.png': 'image/png'}
 
 
@@ -405,10 +407,13 @@ class Operator:
                 telemetry['age_s'] = round(time.monotonic() - latest[1], 1)
             mission = getattr(link, 'mission_slug', None)
         robot = self._active_robot()
+        spectator = getattr(link, 'spectator', None)
         with self.lock:
             pending = dict(self.pending) if self.pending else None
             manual = self.manual
         return {'phase': self.phase, 'running': self.running(), 'error': self.error, 'pending': pending,
+                # The page plays the cameras itself with the ride's spectator identity, like the SDK dashboard.
+                'video': spectator() if spectator is not None else None,
                 'log': list(self.log)[-80:], 'connected': link is not None, 'link_phase': self.link_phase,
                 'link_error': self.link_error, 'router_ok': self.router_ok(), 'telemetry': telemetry, 'mission': mission,
                 'results': self.results(), 'api_url': evaluation.api_url(self.config), 'bot': self.bot,
@@ -460,7 +465,10 @@ button{font:inherit;padding:9px 14px;border-radius:6px;border:1px solid var(--li
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}button.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 button:disabled{opacity:.5;cursor:default}button.on{border-color:var(--warn);color:var(--warn);background:#fff6e5}
 .prompt{border:2px solid var(--accent);background:#eef3fb;grid-column:1/-1}.prompt .q{font-weight:600}.choices{display:flex;gap:8px;flex-wrap:wrap}
-img.cam{width:100%;aspect-ratio:16/9;background:#1a211d;border-radius:8px;object-fit:contain}
+.stage{position:relative}.player{position:relative;background:#1a211d;border-radius:8px;overflow:hidden;aspect-ratio:16/9}.player>div{width:100%;height:100%}
+.placeholder{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;background:#1a211d;color:#cbd6df;text-align:center;padding:0 24px}
+.pip{position:absolute;right:12px;bottom:12px;width:30%;border:2px solid #fff;z-index:6;box-shadow:0 2px 8px rgba(0,0,0,.5)}
+img.cam{display:block;width:100%;aspect-ratio:16/9;background:#1a211d;border-radius:8px;object-fit:contain}
 table{border-collapse:collapse;width:100%;font-size:13px}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:500}
 pre.log{margin:0;max-height:280px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,monospace;background:#f7f8f6;border:1px solid var(--line);border-radius:6px;padding:10px;white-space:pre-wrap}
 .err{color:var(--bad)}.ok{color:var(--ok)}.muted{color:var(--muted)}.chip{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#e6ebe8}
@@ -494,7 +502,10 @@ pre.log{margin:0;max-height:280px;overflow:auto;font:12px/1.5 ui-monospace,Menlo
 <button id="start" class="primary">Start session</button></div>
 <div id="missionInfo" class="muted"></div></section>
 
-<section class="card"><h2>Live rover</h2><img class="cam" id="cam" alt="front camera"><div id="telemetry" class="muted">Not connected.</div></section>
+<section class="card"><div class="head"><h2>Live rover</h2><div class="row"><span class="muted" id="videoState"></span><button id="audio" disabled>Unmute audio</button></div></div>
+<div class="stage"><div class="player" id="front-player"><div class="placeholder" id="front-placeholder">Not connected.</div></div><div class="player pip" id="rear-player" hidden></div>
+<img class="cam" id="cam" alt="front camera (snapshot fallback)" hidden></div>
+<div id="telemetry" class="muted">Not connected.</div></section>
 
 <section class="card"><div class="head"><h2>Map</h2><div class="row"><label class="inline"><input type="checkbox" id="follow" checked> Follow rover</label><button id="clearTrail">Clear trail</button></div></div>
 <div id="map"></div><div id="mapInfo" class="muted">Waiting for a GPS fix…</div></section>
@@ -517,6 +528,7 @@ pre.log{margin:0;max-height:280px;overflow:auto;font:12px/1.5 ui-monospace,Menlo
 <section class="card" style="grid-column:1/-1"><h2>Session log</h2><pre class="log" id="log"></pre><div class="err" id="error"></div></section>
 </main>
 <script src="/static/leaflet/leaflet.js"></script>
+<script src="/static/vendor/AgoraRTC_N-4.24.2.js"></script>
 <script src="/static/operator.js"></script>
 </body></html>
 """
@@ -545,8 +557,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _static(self, name):
-        path = (STATIC / name).resolve()
-        if not name or '\x00' in name or STATIC.resolve() not in path.parents or not path.is_file():
+        first, _, rest = name.partition('/')
+        root = STATIC_ROOTS.get(first)
+        if root is not None:
+            name = rest
+        else:
+            root = STATIC
+        path = (root / name).resolve()
+        if not name or '\x00' in name or root.resolve() not in path.parents or not path.is_file():
             return self._json({'error': 'not found'}, 404)
         self._bytes(path.read_bytes(), STATIC_TYPES.get(path.suffix, 'application/octet-stream'))
 

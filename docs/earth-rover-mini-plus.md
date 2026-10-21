@@ -85,8 +85,16 @@ an abort button for the running trial, a stop button for the session, and the
 submitted results with links to the Router admin and review API. It listens on
 localhost only; the policy server still runs separately.
 
-The page carries the SDK dashboard's map and drive controls (Leaflet 1.9.4 is
-vendored in `rover_ui_static/`; the tiles come from OpenStreetMap):
+The live view is the SDK dashboard's: the page joins the ride's Agora channel
+in your browser with the **spectator** identity the backend issues alongside
+the ride (`SPECTATOR_USERID` / `SPECTATOR_RTC_TOKEN`) and plays the front and
+rear tracks directly, at the rover's frame rate, while the link's headless page
+keeps `USERID` for commands, telemetry and the policy's frames. Audio is
+subscribed but silent until you press Unmute. A link without spectator
+credentials (the simulator) falls back to snapshots.
+
+The page also carries the SDK dashboard's map and drive controls (Leaflet 1.9.4
+is vendored in `rover_ui_static/`; the tiles come from OpenStreetMap):
 
 - **Map**: the rover's position and heading from telemetry, a breadcrumb trail,
   the selected mission's checkpoints (the destination pulses; 15 m circles),

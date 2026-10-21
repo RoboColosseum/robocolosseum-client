@@ -45,6 +45,10 @@ class FrodobotsRoverLink:
     def mission_slug(self):
         return self.session.mission_slug or None
 
+    def spectator(self):
+        """Viewer credentials for the current channel (the operator page plays the cameras itself)."""
+        return self.credentials.spectator() if self.started and self.credentials is not None else None
+
     def set_lamp(self, on):
         """Headlamp bit carried by every command from now on; it survives ride switches."""
         self.lamp = 1 if on else 0

@@ -314,7 +314,7 @@ def test_frodobots_session_mimics_the_sdk_token_and_ride_calls():
     from colosseum_client.robots.earth_rover.session import FrodobotsSession
     calls = []
     credentials = {'APP_ID': 'app', 'CHANNEL_NAME': 'ride_bot_frodobot_x', 'USERID': 42, 'RTC_TOKEN': 'rtc', 'RTM_TOKEN': 'rtm',
-                   'BOT_UID': 'frodobot_x', 'BOT_TYPE': 'mini'}
+                   'BOT_UID': 'frodobot_x', 'BOT_TYPE': 'mini', 'SPECTATOR_USERID': 421, 'SPECTATOR_RTC_TOKEN': 'rtc-spectator'}
     def handler(request):
         calls.append((request.method, request.url.path, json.loads(request.content or b'{}')))
         assert request.headers['authorization'] == 'Bearer secret'
@@ -323,6 +323,8 @@ def test_frodobots_session_mimics_the_sdk_token_and_ride_calls():
     session = FrodobotsSession('secret', 'frodobot_x', api_url='https://api.example/api/v1', transport=transport)
     ride = session.start_ride()
     assert ride.user_id == 42 and ride.bot_uid == 'frodobot_x' and ride.channel == 'ride_bot_frodobot_x'
+    # The second RTC identity the SDK dashboard watches with; the headless page keeps USERID.
+    assert ride.spectator() == {'appid': 'app', 'channel': 'ride_bot_frodobot_x', 'uid': 421, 'rtcToken': 'rtc-spectator'}
     session.end_ride()
     assert calls == [('POST', '/api/v1/sdk/token', {'bot_slug': 'frodobot_x'})]
     with_mission = FrodobotsSession('secret', 'frodobot_x', 'open-mission', api_url='https://api.example/api/v1', transport=transport)
@@ -332,6 +334,8 @@ def test_frodobots_session_mimics_the_sdk_token_and_ride_calls():
                          ('POST', '/api/v1/sdk/end_ride', {'bot_slug': 'frodobot_x', 'mission_slug': 'open-mission'})]
     with pytest.raises(ValueError, match='bot_slug'):
         FrodobotsSession('secret', '', transport=transport)
+    credentials.pop('SPECTATOR_USERID')  # a backend without the spectator identity: the page falls back to snapshots
+    assert FrodobotsSession('secret', 'frodobot_x', api_url='https://api.example/api/v1', transport=transport).start_ride().spectator() is None
 
     def lookup(request):
         if request.url.path.endswith('/sdk/missions'):

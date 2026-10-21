@@ -28,9 +28,19 @@ class RideCredentials:
     bot_uid: str      # The rover's device reference; RTM peer for commands and telemetry.
     bot_type: str
     obtained_at: float
+    # A second RTC identity for watching the cameras alongside the link, the way the
+    # SDK dashboard does (its page joins as the spectator while the headless page keeps USERID).
+    spectator_user_id: int | None = None
+    spectator_rtc_token: str = ''
 
     def expires_in(self):
         return TOKEN_LIFETIME_S - (time.monotonic() - self.obtained_at)
+
+    def spectator(self):
+        """Agora RTC join parameters for a viewer, or None when the backend issued no spectator token."""
+        if self.spectator_user_id is None or not self.spectator_rtc_token:
+            return None
+        return {'appid': self.app_id, 'channel': self.channel, 'uid': self.spectator_user_id, 'rtcToken': self.spectator_rtc_token}
 
 
 class FrodobotsSession:
@@ -80,10 +90,13 @@ class FrodobotsSession:
         missing = [key for key in REQUIRED_KEYS if not data.get(key)]
         if missing:
             raise RuntimeError('FrodoBots start_ride response lacks ' + ', '.join(missing))
+        spectator = data.get('SPECTATOR_USERID')
         self.credentials = RideCredentials(
             app_id=str(data['APP_ID']), channel=str(data['CHANNEL_NAME']), user_id=int(data['USERID']),
             rtc_token=str(data['RTC_TOKEN']), rtm_token=str(data['RTM_TOKEN']), bot_uid=str(data['BOT_UID']),
-            bot_type=str(data.get('BOT_TYPE', '')), obtained_at=time.monotonic())
+            bot_type=str(data.get('BOT_TYPE', '')), obtained_at=time.monotonic(),
+            spectator_user_id=int(spectator) if spectator not in (None, '') else None,
+            spectator_rtc_token=str(data.get('SPECTATOR_RTC_TOKEN') or ''))
         return self.credentials
 
     def end_ride(self):

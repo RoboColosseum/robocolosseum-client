@@ -183,6 +183,90 @@
     if (data.error) feedback(data.error, true); else { lamp = data.lamp; renderLamp(); }
   };
 
+  /* ---------- Live video (the SDK dashboard's spectator join) ---------- */
+  // The backend issues a second RTC identity with every ride (SPECTATOR_USERID / SPECTATOR_RTC_TOKEN).
+  // The link's headless page keeps USERID for commands, telemetry and the policy's frames; this page
+  // joins as the spectator and plays the rover's tracks directly, at the rover's frame rate.
+  const RoverVideo = (function () {
+    const FRONT_UID = 1000, REAR_UID = 1001;
+    let client = null, current = null, switching = false, audioTrack = null, audioPlaying = false, snapshotTimer = null;
+    const audioTracks = {};
+    function status(text, isError) { $('videoState').textContent = text; $('videoState').className = isError ? 'err' : 'muted'; }
+    function placeholder(text) { $('front-placeholder').hidden = !text; $('front-placeholder').textContent = text || ''; }
+    function selectAudio() {  // prefer the front publisher; never play until the operator unmutes
+      const next = audioTracks[FRONT_UID] || audioTracks[REAR_UID] || null;
+      if (next !== audioTrack) {
+        if (audioTrack && audioPlaying) audioTrack.stop();
+        audioTrack = next;
+        if (audioTrack && audioPlaying) audioTrack.play();
+        if (!audioTrack) audioPlaying = false;
+      }
+      $('audio').disabled = !audioTrack;
+      $('audio').textContent = audioPlaying ? 'Mute audio' : 'Unmute audio';
+    }
+    async function leave() {
+      const old = client;
+      client = null; current = null;
+      Object.keys(audioTracks).forEach(uid => delete audioTracks[uid]);
+      selectAudio();
+      $('rear-player').hidden = true;
+      if (old) { try { await old.leave(); } catch (err) { /* already gone */ } }
+    }
+    function join(video) {
+      current = video;
+      const me = client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
+      me.on('connection-state-change', s => { if (me === client) status(s === 'CONNECTED' ? 'live' : s.toLowerCase()); });
+      me.on('user-published', (user, mediaType) => {
+        const uid = parseInt(user.uid, 10);
+        if (uid !== FRONT_UID && uid !== REAR_UID) return;  // not other spectators nor the link's headless page
+        me.subscribe(user, mediaType).then(() => {
+          if (me !== client) return;
+          if (mediaType === 'video') {
+            if (uid === REAR_UID) { $('rear-player').hidden = false; user.videoTrack.play('rear-player'); }
+            else { placeholder(''); user.videoTrack.play('front-player'); }
+          }
+          if (mediaType === 'audio') { audioTracks[uid] = user.audioTrack; selectAudio(); }
+        }).catch(err => status('subscribe failed: ' + (err.message || err), true));
+      });
+      me.on('user-unpublished', (user, mediaType) => {
+        const uid = parseInt(user.uid, 10);
+        if (uid !== FRONT_UID && uid !== REAR_UID) return;
+        if (mediaType === 'video') { if (uid === REAR_UID) $('rear-player').hidden = true; else placeholder('The rover stopped publishing video.'); }
+        if (mediaType === 'audio') { delete audioTracks[uid]; selectAudio(); }
+      });
+      placeholder('Joining the rover channel…');
+      me.join(video.appid, video.channel, video.rtcToken, parseInt(video.uid, 10) || null)
+        .catch(err => { status('join failed: ' + (err.message || err), true); placeholder('Video connection failed; reload the page.'); });
+    }
+    function snapshots(on) {  // a link without a spectator identity (the simulator): the operator process's frames
+      $('cam').hidden = !on; $('front-player').hidden = on;
+      if (on && !snapshotTimer) snapshotTimer = setInterval(() => { $('cam').src = '/frame.jpg?t=' + Date.now(); }, 250);
+      if (!on && snapshotTimer) { clearInterval(snapshotTimer); snapshotTimer = null; }
+    }
+    // Every poll: join the ride's channel, re-join when a trial moves the connection to another channel, leave on disconnect.
+    function sync(video, connected) {
+      if (!video || typeof AgoraRTC === 'undefined') {
+        if (client) leave();
+        snapshots(!!connected);
+        if (!connected) placeholder('Not connected.');
+        status(!connected ? '' : video ? 'Agora client not loaded' : 'snapshots', !!video);
+        return;
+      }
+      snapshots(false);
+      if (switching || (client && current && ['channel', 'uid', 'rtcToken'].every(k => current[k] === video[k]))) return;
+      switching = true;
+      leave().then(() => join(video)).finally(() => { switching = false; });
+    }
+    $('audio').onclick = () => {
+      if (!audioTrack) return;
+      if (audioPlaying) audioTrack.stop(); else audioTrack.play();
+      audioPlaying = !audioPlaying;
+      $('audio').textContent = audioPlaying ? 'Mute audio' : 'Unmute audio';
+    };
+    if (typeof AgoraRTC !== 'undefined' && AgoraRTC.setLogLevel) AgoraRTC.setLogLevel(2);
+    return { sync };
+  })();
+
   /* ---------- Robot, mission and session ---------- */
   $('list').onclick = async () => {
     $('missionInfo').textContent = 'Listing missions…';
@@ -272,7 +356,7 @@
       renderPrompt(s.pending);
       $('log').textContent = s.log.join('\n'); $('log').scrollTop = $('log').scrollHeight;
       $('error').textContent = s.error || '';
-      if (s.connected) { $('cam').src = '/frame.jpg?t=' + Date.now(); }
+      RoverVideo.sync(s.connected ? s.video : null, s.connected);
       $('telemetry').innerHTML = s.telemetry ? Object.entries(s.telemetry).map(([k, v]) => `<span class="chip">${k} ${v}</span>`).join(' ') : (s.link_phase === 'connecting' || s.running ? 'Connecting to the rover…' : 'Not connected. Enter the bot slug and press Connect.');
       renderMap(s.telemetry, s.goal);
       renderDrive(s);

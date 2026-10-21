@@ -246,7 +246,19 @@ def test_static_files_are_served_from_the_package(page):
     assert call('/static/leaflet/leaflet.css')[0] == 200
     assert call('/static/leaflet/images/marker-icon.png')[0] == 200
     assert call('/static/operator.js')[0] == 200
+    assert call('/static/vendor/AgoraRTC_N-4.24.2.js')[0] == 200  # the SDK's Agora web client, shared with the link
+    assert call('/static/vendor/rover.html')[0] == 200
+    assert call('/static/vendor/../browser.py')[0] == 404
     assert call('/static/../rover_ui.py')[0] == 404
     assert call('/static/')[0] == 404
     status, body = call('/')
     assert b'/static/operator.js' in body and b'id="map"' in body and b'data-dir="forward"' in body
+    assert b'id="front-player"' in body and b'AgoraRTC_N-4.24.2.js' in body
+
+
+def test_state_carries_the_spectator_identity_for_the_page_to_play_video(page):
+    operator, call = page
+    connect(call)
+    assert state(call)['video'] is None  # the simulator issues no spectator token: the page falls back to snapshots
+    operator.link.spectator = lambda: {'appid': 'app', 'channel': 'ride_bot_x', 'uid': 421, 'rtcToken': 'rtc-spectator'}
+    assert state(call)['video'] == {'appid': 'app', 'channel': 'ride_bot_x', 'uid': 421, 'rtcToken': 'rtc-spectator'}
