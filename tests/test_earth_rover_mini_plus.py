@@ -437,3 +437,55 @@ def test_bot_slug_is_asked_for_when_not_configured(tmp_path, monkeypatch):
     configured = rover_config(tmp_path, link='frodobots', bot_slug='frodobot_y')
     assert e.rover_bot(configured) is configured
     assert e.rover_bot(rover_config(tmp_path)) is not None  # simulated link: no prompt
+
+
+
+def test_frodobots_link_switches_between_preview_and_ride(monkeypatch):
+    import httpx
+    from colosseum_client.robots.earth_rover import frodobots_link as module
+    from colosseum_client.robots.earth_rover.session import FrodobotsSession
+    calls = []
+    def handler(request):
+        body = json.loads(request.content or b'{}')
+        calls.append((request.url.path.rsplit('/', 1)[-1], body.get('mission_slug')))
+        channel = 'ride_42' if body.get('mission_slug') else 'ride_bot_frodobot_x'
+        return httpx.Response(200, json={'APP_ID': 'app', 'CHANNEL_NAME': channel, 'USERID': 7, 'RTC_TOKEN': 'rtc', 'RTM_TOKEN': 'rtm',
+                                         'BOT_UID': 'frodobot_x', 'BOT_TYPE': 'mini', 'message': 'ok'})
+    class Video:
+        instances = []
+        def __init__(self, credentials, cameras): self.channel = credentials.channel; self.closed = False; Video.instances.append(self)
+        def start(self): pass
+        def wait_for(self, camera, timeout): return True
+        def latest(self): return {'front_image': (np.zeros((2, 2, 3), np.uint8), time.monotonic())}
+        def close(self): self.closed = True
+    class Telemetry:
+        def __init__(self, credentials): self.closed = False
+        def start(self): pass
+        def latest(self): return ({name: 1.0 for name in NAV_STATE_NAMES}, time.monotonic())
+        def close(self): self.closed = True
+    class Sender:
+        def __init__(self, credentials): self.destination = credentials.bot_uid; self.stops = 0; self.closed = False
+        def send(self, linear, angular): pass
+        def stop(self, confirm=True): self.stops += 1; return True
+        def close(self): self.closed = True
+    import colosseum_client.robots.earth_rover.video as video_module
+    import colosseum_client.robots.earth_rover.telemetry as telemetry_module
+    import colosseum_client.robots.earth_rover.commands as commands_module
+    monkeypatch.setattr(video_module, 'AgoraVideo', Video)
+    monkeypatch.setattr(telemetry_module, 'RtmTelemetry', Telemetry)
+    monkeypatch.setattr(commands_module, 'RtmRestSender', Sender)
+    link = module.FrodobotsRoverLink({'sdk_token': 'secret', 'bot_slug': 'frodobot_x', 'first_frame_timeout_s': 1}, ['front_image'], (2, 2))
+    link.session = FrodobotsSession('secret', 'frodobot_x', api_url='https://api.example/api/v1', transport=httpx.MockTransport(handler))
+    link.start()  # preview
+    assert link.started and link.mission_slug is None and Video.instances[-1].channel == 'ride_bot_frodobot_x'
+    link.start()  # idempotent
+    assert len(Video.instances) == 1
+    link.start('plaza')  # switch to the ride: new channel, old media closed
+    assert link.mission_slug == 'plaza' and Video.instances[-1].channel == 'ride_42' and Video.instances[0].closed
+    link.start('plaza')  # already riding it
+    assert len(Video.instances) == 2
+    link.end_trial()  # stop, release the ride, back to the preview
+    assert link.started and link.mission_slug is None and Video.instances[-1].channel == 'ride_bot_frodobot_x'
+    assert [call for call in calls if call[0] in ('start_ride', 'end_ride')] == [('start_ride', 'plaza'), ('end_ride', 'plaza')]
+    link.close()
+    assert not link.started and Video.instances[-1].closed

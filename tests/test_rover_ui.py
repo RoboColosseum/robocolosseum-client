@@ -35,6 +35,8 @@ def page(tmp_path):
     server.shutdown()
     server.server_close()
     e.ask = lambda prompt, options=None: input(prompt)
+    from colosseum_client.robots.earth_rover import use_shared_link
+    use_shared_link(None)
 
 
 def wait_until(predicate, timeout=3.0):
@@ -48,6 +50,7 @@ def wait_until(predicate, timeout=3.0):
 
 def test_prompts_become_forms_and_answers_flow_back(page, monkeypatch):
     operator, call = page
+    monkeypatch.setattr(operator, 'router_ok', lambda: True)
     seen = {}
     def fake_run(cfg, **kwargs):
         seen['bot'] = cfg.adapter_config.get('bot_slug')
@@ -77,6 +80,7 @@ def test_prompts_become_forms_and_answers_flow_back(page, monkeypatch):
 
 def test_stop_abort_frame_and_results(page, monkeypatch, tmp_path):
     operator, call = page
+    monkeypatch.setattr(operator, 'router_ok', lambda: True)
     def fake_run(cfg, **kwargs):
         e.ask('press Enter to start', options=[('', 'Start trial')])
     monkeypatch.setattr(e, 'run_evaluation', fake_run)
@@ -115,3 +119,44 @@ def test_terminal_prompts_still_read_stdin(monkeypatch):
     assert e.yes_no('Continue?') is True
     monkeypatch.setattr('builtins.input', lambda prompt: '3')
     assert e.rover_score('trial') == {'success': False, 'partial_success': 0.75}
+
+
+
+def test_connect_first_then_the_trial_rides_on_the_shared_link(page, monkeypatch):
+    operator, call = page
+    monkeypatch.setattr(operator, 'router_ok', lambda: True)
+    assert call('/api/connect', {'bot': ''})[0] == 409
+    assert json.loads(call('/api/connect', {'bot': 'frodobot_x'})[1])['ok']
+    assert wait_until(lambda: json.loads(call('/api/state')[1])['link_phase'] == 'connected')
+    state = json.loads(call('/api/state')[1])
+    assert state['connected'] and state['mission'] is None and state['telemetry']['battery'] == 100
+    status, body = call('/frame.jpg')
+    assert status == 200 and body[:2] == b'\xff\xd8'
+    assert call('/api/connect', {'bot': 'frodobot_x'})[0] == 409  # already connected
+    assert call('/api/start', {'bot': 'other'})[0] == 409  # another rover needs a disconnect first
+    preview = operator.link
+    seen = {}
+    def fake_run(cfg, **kwargs):
+        from colosseum_client.robots import earth_rover_mini_plus as rover
+        robot = rover.EarthRoverMiniPlusRobot(cfg)
+        robot.prepare_for_task({'goal': {'type': 'gps', 'latitude': 1.0, 'longitude': 2.0, 'mission_slug': 'plaza'}})
+        seen['same_link'] = robot.link is preview
+        seen['mission'] = preview.mission_slug
+        robot.get_observation()
+        robot.close()
+        seen['after'] = (preview.started, preview.mission_slug, preview.stops)
+    monkeypatch.setattr(e, 'run_evaluation', fake_run)
+    assert json.loads(call('/api/start', {'bot': 'frodobot_x', 'mission': 'plaza'})[1])['ok']
+    assert wait_until(lambda: json.loads(call('/api/state')[1])['phase'] == 'finished')
+    assert seen['same_link'] and seen['mission'] == 'plaza'
+    assert seen['after'][0] is True and seen['after'][1] is None and seen['after'][2] >= 1
+    assert json.loads(call('/api/state')[1])['connected']  # the preview survives the trial
+    assert json.loads(call('/api/disconnect', {})[1])['ok']
+    assert preview.closed and json.loads(call('/api/state')[1])['link_phase'] == 'disconnected'
+
+
+def test_start_explains_an_unreachable_router(page, monkeypatch):
+    operator, call = page
+    monkeypatch.setattr(e, 'run_evaluation', lambda cfg, **kwargs: None)
+    status, body = call('/api/start', {'bot': 'frodobot_x'})
+    assert status == 409 and 'not reachable' in json.loads(body)['error'] and 'start-router.sh' in json.loads(body)['error']

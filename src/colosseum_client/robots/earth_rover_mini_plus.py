@@ -287,7 +287,11 @@ class EarthRoverMiniPlusRobot(Robot):
         except Exception as exc:
             print(f'Earth Rover stop failed ({type(exc).__name__})', flush=True)
         try:
-            self.link.close()
+            if getattr(self.link, 'shared', False):
+                if self.started:
+                    self.link.end_trial()  # the operator page keeps its preview connection
+            else:
+                self.link.close()
         except Exception as exc:
             if confirmed:
                 raise

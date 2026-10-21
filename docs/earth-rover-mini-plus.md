@@ -62,14 +62,17 @@ first thing to run on a new rover or operator machine.
 
 ## Operator page
 
-`colosseum-rover-ui configs/robot.yaml` opens http://127.0.0.1:8770: enter the
-bot, list its missions, pick one and the destination checkpoint, choose the
-track and whether the rover may move, and start. It runs exactly the terminal
-flow, but every question (start trial, score 0–4, preference) appears as a
-form, with the live front camera, telemetry, an abort button for the running
-trial and a stop button for the session; submitted results are listed with
-links to the Router admin and review API. It listens on localhost only, like
-the SDK dashboard; the policy server still runs separately.
+`colosseum-rover-ui configs/robot.yaml` opens http://127.0.0.1:8770 and works
+like the SDK dashboard: enter the bot and press **Connect** (a token-only
+session: live front camera and telemetry, no ride yet), pick one of its
+missions and the destination checkpoint, choose the track and whether the
+rover may move, and **Start session**. A trial switches that same connection
+to a ride on the mission and returns to the preview when it ends. The page
+runs exactly the terminal flow, so every question (start trial, score 0–4,
+preference) appears as a form; it also shows whether the Router is reachable,
+an abort button for the running trial, a stop button for the session, and the
+submitted results with links to the Router admin and review API. It listens on
+localhost only; the policy server still runs separately.
 
 ## Scoring
 

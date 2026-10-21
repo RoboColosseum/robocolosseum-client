@@ -39,6 +39,7 @@ class RoverLink(Protocol):
 
 class SimulatedRoverLink:
     """Dead-reckoning rover: synthetic frames, telemetry integrated from the commands it receives."""
+    shared = False
 
     def __init__(self, cameras=(FRONT_CAMERA,), size=(512, 288), *, start=(37.0, -122.0),
                  stale=False, stop_ok=True, telemetry=True):
@@ -58,9 +59,18 @@ class SimulatedRoverLink:
         self._frame = 0
 
     def start(self, mission_slug=None):
+        if self.started and not mission_slug:
+            return  # the preview connection serves a trial without a mission
         self.started = True
         self.mission_slug = mission_slug
         self._updated = time.monotonic()
+
+    def end_trial(self):
+        """Shared connection: stop, leave the mission, keep the preview open."""
+        confirmed = self.stop(confirm=True)
+        self.mission_slug = None
+        if not confirmed:
+            raise RuntimeError('Rover stop was not confirmed')
 
     def _integrate(self, linear, angular):
         now = time.monotonic()

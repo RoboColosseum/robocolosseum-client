@@ -3,11 +3,22 @@ from __future__ import annotations
 
 from .link import RoverLink, SimulatedRoverLink
 
-__all__ = ['RoverLink', 'SimulatedRoverLink', 'make_link']
+__all__ = ['RoverLink', 'SimulatedRoverLink', 'make_link', 'use_shared_link']
+
+_SHARED = {'link': None}
+
+
+def use_shared_link(link):
+    """Register a connection opened ahead of the trial (the operator page's preview); ``None`` clears it."""
+    if link is not None:
+        link.shared = True
+    _SHARED['link'] = link
 
 
 def make_link(settings, *, cameras, size):
     """Select the transport named by ``adapter_config.link`` without importing hardware SDKs for the simulator."""
+    if _SHARED['link'] is not None:
+        return _SHARED['link']
     kind = settings.get('link', 'frodobots')
     if kind == 'simulated':
         return SimulatedRoverLink(cameras, size)

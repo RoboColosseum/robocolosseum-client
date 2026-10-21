@@ -22,9 +22,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
+
 from . import evaluation
 from .navigation import FRONT_CAMERA, ROVER_TYPE
 from .robot_config import RobotClientConfig
+from .robots.earth_rover import make_link, use_shared_link
 
 STOP_SENTINEL = object()
 
@@ -42,6 +45,11 @@ class Operator:
         self.error = ''
         self.phase = 'idle'
         self.counter = 0
+        self.link = None
+        self.link_phase = 'disconnected'
+        self.link_error = ''
+        self.bot = config.adapter_config.get('bot_slug', '')
+        self._router = (0.0, None)
 
     # --- prompts and output -------------------------------------------------
     def ask(self, prompt, options=None):
@@ -75,6 +83,52 @@ class Operator:
     def flush(self):
         sys.__stdout__.flush()
 
+    # --- rover connection (the SDK's connect-first step) --------------------
+    def connect(self, bot):
+        if self.link is not None or self.link_phase == 'connecting':
+            raise RuntimeError('Already connected; disconnect first')
+        if self.running():
+            raise RuntimeError('Stop the session before connecting another rover')
+        from .robots.earth_rover_mini_plus import resolve_secret
+        settings = {**self.config.adapter_config, 'bot_slug': bot}
+        settings['sdk_token'] = resolve_secret(settings.get('sdk_token'))
+        settings.pop('mission_slug', None)
+        self.bot = bot
+        self.link_phase = 'connecting'
+        self.link_error = ''
+
+        def worker():
+            try:
+                link = make_link(settings, cameras=list(self.config.cameras),
+                                 size=(self.config.image_width, self.config.image_height))
+                link.start()  # token-only preview: live camera and telemetry, no ride yet
+                use_shared_link(link)
+                self.link = link
+                self.link_phase = 'connected'
+            except Exception as exc:
+                self.link_error = f'{type(exc).__name__}: {exc}'[:300]
+                self.link_phase = 'error'
+        threading.Thread(target=worker, name='colosseum-rover-connect', daemon=True).start()
+
+    def disconnect(self):
+        if self.running():
+            raise RuntimeError('Stop the session first')
+        link, self.link = self.link, None
+        use_shared_link(None)
+        self.link_phase = 'disconnected'
+        if link is not None:
+            link.close()
+
+    def router_ok(self):
+        checked, status = self._router
+        if time.monotonic() - checked > 10:
+            try:
+                status = httpx.get(evaluation.api_url(self.config).rstrip('/') + '/api/health', timeout=3).is_success
+            except Exception:
+                status = False
+            self._router = (time.monotonic(), status)
+        return status
+
     # --- session lifecycle --------------------------------------------------
     def running(self):
         return self.thread is not None and self.thread.is_alive()
@@ -82,7 +136,14 @@ class Operator:
     def start(self, *, bot='', mission='', checkpoint='', track='', execute=True):
         if self.running():
             raise RuntimeError('A session is already running')
+        if self.link is not None and bot and bot != self.bot:
+            raise RuntimeError(f'Connected to {self.bot}; disconnect before using another rover')
+        self._router = (0.0, None)
+        if not self.router_ok():
+            raise RuntimeError(f'Router {evaluation.api_url(self.config)} is not reachable: start it '
+                               '(start-router.sh) or fix router_url / api_url in the config')
         settings = dict(self.config.adapter_config)
+        bot = bot or self.bot
         if bot:
             settings['bot_slug'] = bot
         if mission:
@@ -126,17 +187,19 @@ class Operator:
             self.answers.put(STOP_SENTINEL)
 
     # --- what the page shows ------------------------------------------------
-    @staticmethod
-    def _robot():
+    def _live_link(self):
+        """The connection to show: the page's preview link, or the trial adapter's own link."""
+        if self.link is not None and getattr(self.link, 'started', False):
+            return self.link
         from .robots.earth_rover_mini_plus import EarthRoverMiniPlusRobot
         robot = EarthRoverMiniPlusRobot.active
-        return robot if robot is not None and robot.started and not robot.closed else None
+        return robot.link if robot is not None and robot.started and not robot.closed else None
 
     def frame_jpeg(self):
-        robot = self._robot()
-        if robot is None:
+        link = self._live_link()
+        if link is None:
             return None
-        frames = robot.link.latest_frames()
+        frames = link.latest_frames()
         if FRONT_CAMERA not in frames:
             return None
         from PIL import Image
@@ -163,25 +226,28 @@ class Operator:
         return rows
 
     def state(self):
-        robot = self._robot()
+        link = self._live_link()
         telemetry = None
         mission = None
-        if robot is not None:
-            latest = robot.link.latest_telemetry()
+        if link is not None:
+            latest = link.latest_telemetry()
             if latest:
                 telemetry = {name: round(value, 6) for name, value in latest[0].items()}
-            mission = getattr(robot.link, 'mission_slug', None) or getattr(getattr(robot.link, 'session', None), 'mission_slug', None)
+            mission = getattr(link, 'mission_slug', None)
         with self.lock:
             pending = dict(self.pending) if self.pending else None
         return {'phase': self.phase, 'running': self.running(), 'error': self.error, 'pending': pending,
-                'log': list(self.log)[-80:], 'connected': robot is not None, 'telemetry': telemetry, 'mission': mission,
-                'results': self.results(), 'api_url': evaluation.api_url(self.config),
-                'bot': self.config.adapter_config.get('bot_slug', ''), 'track': self.config.track,
-                'robot_type': self.config.robot_type}
+                'log': list(self.log)[-80:], 'connected': link is not None, 'link_phase': self.link_phase,
+                'link_error': self.link_error, 'router_ok': self.router_ok(), 'telemetry': telemetry, 'mission': mission,
+                'results': self.results(), 'api_url': evaluation.api_url(self.config), 'bot': self.bot,
+                'track': self.config.track, 'robot_type': self.config.robot_type}
 
     def missions(self, bot):
         settings = {**self.config.adapter_config, 'bot_slug': bot}
-        session = evaluation.rover_session(replace(self.config, adapter_config=settings))
+        session = getattr(self.link, 'session', None) if self.link is not None and bot == self.bot else None
+        owned = session is None
+        if owned:
+            session = evaluation.rover_session(replace(self.config, adapter_config=settings))
         if session is None:
             return {'missions': [], 'note': 'Simulated or test mode: no FrodoBots missions.'}
         try:
@@ -194,7 +260,8 @@ class Operator:
                     mission['error'] = type(exc).__name__
             return {'missions': missions}
         finally:
-            session.close()
+            if owned:
+                session.close()
 
 
 PAGE = r"""<!doctype html>
@@ -202,7 +269,7 @@ PAGE = r"""<!doctype html>
 <title>RoboColosseum Rover Operator</title>
 <style>
 :root{--bg:#f4f6f3;--card:#fff;--ink:#17201b;--muted:#5d6a63;--line:#d9e0db;--accent:#2a5fb0;--ok:#1f6f44;--bad:#a8251d;--warn:#8a5300}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,"Segoe UI",Inter,system-ui,sans-serif}
+*{box-sizing:border-box}[hidden]{display:none !important}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,"Segoe UI",Inter,system-ui,sans-serif}
 header{padding:18px 24px;border-bottom:1px solid var(--line);background:var(--card);display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
 header h1{font-size:18px;margin:0}header .phase{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--muted)}
 main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;padding:16px 24px;max-width:1400px;margin:0 auto}
@@ -224,7 +291,8 @@ pre.log{margin:0;max-height:280px;overflow:auto;font:12px/1.5 ui-monospace,Menlo
 <div class="row"><button id="abort" class="danger" disabled>Abort trial</button><button id="stop" disabled>Stop session</button></div></header>
 <main>
 <section class="card" id="connect"><h2>1 · Robot and mission</h2>
-<div class="row"><label>Bot slug<input id="bot" placeholder="link-node-inert"></label><button id="list">List missions</button></div>
+<div class="row"><label>Bot slug<input id="bot" placeholder="link-node-inert"></label><button id="connectBtn" class="primary">Connect</button><button id="disconnectBtn" hidden>Disconnect</button><button id="list">List missions</button></div>
+<div id="status" class="muted"></div>
 <div class="row"><label>Mission<select id="mission"><option value="">— choose after listing —</option></select></label>
 <label>Destination checkpoint<select id="checkpoint"><option value="">last</option></select></label></div>
 <div class="row"><label>Track<select id="track"><option value="fine-tuning">Fine-tuning (one policy per trial)</option><option value="open">Open (A/B pair)</option></select></label>
@@ -263,6 +331,8 @@ $('start').onclick = async () => {
   if (data.error) $('error').textContent = data.error;
 };
 $('abort').onclick = () => api('/api/abort', {});
+$('connectBtn').onclick = async () => { const data = await api('/api/connect', {bot: $('bot').value.trim()}); if (data.error) $('error').textContent = data.error; else setTimeout(() => $('list').onclick(), 500); };
+$('disconnectBtn').onclick = async () => { const data = await api('/api/disconnect', {}); if (data.error) $('error').textContent = data.error; };
 $('stop').onclick = () => api('/api/stop', {});
 $('send').onclick = () => api('/api/answer', {value: $('answer').value}).then(() => { $('answer').value = ''; });
 $('answer').addEventListener('keydown', e => { if (e.key === 'Enter') $('send').onclick(); });
@@ -287,12 +357,19 @@ async function poll(){
     if (!$('bot').value && s.bot) $('bot').value = s.bot;
     if (s.track && !$('track').dataset.set) { $('track').value = s.track; $('track').dataset.set = '1'; }
     $('start').disabled = s.running; $('abort').disabled = !s.running; $('stop').disabled = !s.running;
+    const linked = s.link_phase === 'connected' || s.link_phase === 'connecting';
+    $('connectBtn').hidden = linked; $('disconnectBtn').hidden = !linked; $('disconnectBtn').disabled = s.running || s.link_phase === 'connecting';
+    $('bot').disabled = linked;
+    $('status').innerHTML = `Router ${s.router_ok ? '<span class="ok">reachable</span>' : '<span class="err">not reachable at ' + s.api_url + ' (start it: start-router.sh)</span>'} · Rover ${
+      s.link_phase === 'connected' ? '<span class="ok">connected' + (s.mission ? ' · riding ' + s.mission : ' (preview, no ride)') + '</span>' :
+      s.link_phase === 'connecting' ? '<span class="muted">connecting…</span>' :
+      s.link_phase === 'error' ? '<span class="err">' + (s.link_error || 'connection failed') + '</span>' : '<span class="muted">not connected</span>'}`;
     renderPrompt(s.pending);
     $('log').textContent = s.log.join('\n'); $('log').scrollTop = $('log').scrollHeight;
     $('error').textContent = s.error || '';
     connected = s.connected;
     if (s.connected) { $('cam').src = '/frame.jpg?t=' + Date.now(); }
-    $('telemetry').innerHTML = s.telemetry ? Object.entries(s.telemetry).map(([k, v]) => `<span class="chip">${k} ${v}</span>`).join(' ') : (s.running ? 'Connecting to the rover…' : 'Not connected.');
+    $('telemetry').innerHTML = s.telemetry ? Object.entries(s.telemetry).map(([k, v]) => `<span class="chip">${k} ${v}</span>`).join(' ') : (s.link_phase === 'connecting' || s.running ? 'Connecting to the rover…' : 'Not connected. Enter the bot slug and press Connect.');
     renderResults(s.results);
     $('admin').href = s.api_url + '/admin/overview'; $('review').href = s.api_url + '/api/eval/review/fine-tuning';
   } catch (e) { $('phase').textContent = 'page cannot reach the operator process'; }
@@ -365,6 +442,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({'ok': False, 'error': f'{type(exc).__name__}: {exc}'[:300]}, 409)
         elif self.path == '/api/answer':
             self._json({'ok': self.operator.answer(payload.get('value', ''))})
+        elif self.path in ('/api/connect', '/api/disconnect'):
+            try:
+                if self.path == '/api/connect':
+                    bot = str(payload.get('bot', '')).strip()
+                    if not bot:
+                        raise ValueError('Enter a bot slug first')
+                    self.operator.connect(bot)
+                else:
+                    self.operator.disconnect()
+                self._json({'ok': True})
+            except Exception as exc:
+                self._json({'ok': False, 'error': f'{type(exc).__name__}: {exc}'[:300]}, 409)
         elif self.path == '/api/abort':
             self.operator.abort_trial()
             self._json({'ok': True})
