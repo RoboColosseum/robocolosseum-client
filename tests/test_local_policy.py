@@ -134,6 +134,59 @@ async def test_ready_starts_inference_without_router_ack(monkeypatch, receipt, p
         await asyncio.gather(c.receiver_task,c.reporting_task,c.heartbeat_task,return_exceptions=True)
 
 
+async def test_so101_llm_uses_router_frequency_and_internal_eef_contract(monkeypatch):
+    from colosseum_client.local_protocol import encode_control, decode_control
+    from colosseum_client import local_policy
+    cfg = RobotClientConfig(url='ws://router', token='secret', cameras={}, robot_type='so101',
+        control_hz=30, llm_control_mode='eef_delta_pose',
+        llm_account_logins={'anthropic': 'claude-code'},
+        policy_server_url='ws://127.0.0.1:8000')
+    c = LocalPolicyClient(cfg, 'http://router', robot_type='so101', joint_count=5,
+                          control_hz=cfg.control_hz, action_spaces={'joint_position': 6})
+    model = dict(model_type='llm', name='claude-opus-5-5',
+        url='https://api.anthropic.com/v1', revision='rig-v1',
+        action_space='joint_position', action_dim=6, control_hz=10, max_horizon=4)
+    preparation = dict(type='prepare', protocol_version=1, run_id='run',
+        preparation_id='p', model=model, test=False, task={'instruction': 'Move cup'})
+
+    class Router:
+        first = True
+        async def recv(self):
+            if self.first:
+                self.first = False
+                return encode_control(preparation)
+            await asyncio.Event().wait()
+        async def send(self, raw):
+            pass
+
+    class Policy:
+        async def recv(self):
+            return encode_control({**preparation, 'type': 'ready',
+                'control_mode': 'eef_delta_pose', 'internal_action_dim': 7})
+        async def send(self, raw):
+            sent = decode_control(raw)
+            assert sent['llm_auth'] == 'claude-code' and 'api_key' not in sent
+        def __aiter__(self): return self
+        async def __anext__(self):
+            await asyncio.Event().wait()
+
+    connections = iter([Router(), Policy()])
+    async def connect(*args, **kwargs):
+        return next(connections)
+    monkeypatch.setattr(local_policy, 'connect', connect)
+    try:
+        ready = await asyncio.wait_for(c.connect(evaluation_run='run'), .2)
+        assert ready.control_hz == 10
+        assert c.native_control_mode == 'eef_delta_pose'
+        assert c.native_action_dim == 7
+    finally:
+        for task in (c.receiver_task, c.reporting_task, c.heartbeat_task):
+            if task is not None:
+                task.cancel()
+        await asyncio.gather(*(task for task in (c.receiver_task, c.reporting_task, c.heartbeat_task)
+                               if task is not None), return_exceptions=True)
+
+
 async def test_background_router_rejection_stops_further_actions():
     from colosseum_client.local_protocol import encode_control
     c=client()

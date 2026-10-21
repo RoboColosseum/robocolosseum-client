@@ -76,3 +76,19 @@ def test_shared_relay_selects_key_by_model_name(name, provider):
     assert 'api_key' not in prepare
     with pytest.raises(ValueError, match='no matching'):
         local_preparation(prepare, {k:v for k,v in keys.items() if k != provider}, 'ws://localhost:8000')
+
+
+def test_claude_account_advertises_provider_without_sending_api_key():
+    cfg = config(llm_account_logins={'anthropic': 'claude-code'})
+    assert cfg.llm_providers == ['anthropic']
+    assert cfg.llm_api_urls == ['https://api.anthropic.com/v1']
+    preparation = {'type': 'prepare', 'run_id': 'run',
+                   'model': {'model_type': 'llm', 'name': 'claude-opus-5-5',
+                              'url': 'https://api.anthropic.com/v1'}}
+    actual = decode_control(encode_control(local_preparation(
+        preparation, cfg.llm_api_keys, cfg.policy_server_url, cfg.llm_account_logins)))
+    assert actual['llm_auth'] == 'claude-code'
+    assert 'api_key' not in actual
+    with pytest.raises(ValueError, match='either an Anthropic API key'):
+        config(llm_api_keys={'anthropic': 'key'},
+               llm_account_logins={'anthropic': 'claude-code'})

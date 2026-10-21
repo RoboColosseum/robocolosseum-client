@@ -48,7 +48,8 @@ def hardware(monkeypatch):
 def test_state_split_camera_types_and_action_order(hardware):
     robot = make_robot(config(max_relative_target=20))
     follower = hardware[0]
-    assert follower.arguments == ('/dev/ttyACM0', 'follower_arm', None, 20)
+    assert follower.arguments == ('/dev/ttyACM0', 'follower_arm', None, 20.0)
+    assert type(follower.arguments[3]) is float
     assert follower.cameras == {'head_image': ('realsense', '123456789012', 640, 480, 30),
                                 'left_image': ('opencv', '/dev/video0', 640, 480, 30)}
     obs = robot.get_observation()

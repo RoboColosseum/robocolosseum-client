@@ -46,6 +46,10 @@ class LocalPolicyClient(ColosseumClient):
         self.control_base = urlunsplit(('wss' if parts.scheme == 'https' else 'ws', parts.netloc,
                                        parts.path.rstrip('/'), '', ''))
         self.llm_api_keys = dict(getattr(config, "llm_api_keys", {}))
+        self.llm_account_logins = dict(getattr(config, "llm_account_logins", {}))
+        self.llm_control_mode = getattr(config, "llm_control_mode", "joint_pos")
+        self.native_control_mode = "joint_pos"
+        self.native_action_dim = None
         self.router_token = config.token
         self.institution = config.institution.strip()
         self.test_robot = config.test or config.robot_type == "test"
@@ -80,9 +84,10 @@ class LocalPolicyClient(ColosseumClient):
         self.model = self.router_model
         self.task = preparation['task']
         dimensions = {a.name: a.action_dim for a in self.robot_spec.action_spaces}
+        llm_assigned = self.model.get('model_type') == 'llm'
         if (not verification_only and not self.test_robot and not self.use_local_action_contract
                 and (dimensions.get(self.model['action_space']) != self.model['action_dim']
-                     or self.model['control_hz'] != self.robot_spec.control_hz)):
+                     or (not llm_assigned and self.model['control_hz'] != self.robot_spec.control_hz))):
             raise ProtocolError('Assigned model does not support this robot action contract')
         simulate = False
         # Router credentials never travel to the local service.
@@ -94,7 +99,7 @@ class LocalPolicyClient(ColosseumClient):
         from .llm_credentials import local_preparation
         await self.connection.send(encode_control(
             local_preparation({**preparation, 'robot_type': self.hardware_robot_type},
-                              self.llm_api_keys, self.router_url)))
+                              self.llm_api_keys, self.router_url, self.llm_account_logins)))
         async with timeout(self.prepare_timeout):
             while True:
                 ready = await receive_control(self.connection, self.prepare_timeout)
@@ -128,6 +133,15 @@ class LocalPolicyClient(ColosseumClient):
                     ready = {**ready, 'type':'ready', 'state':'simulation'}
                 if ready.get('type') != 'ready' or ready.get('model') != self.router_model:
                     raise ProtocolError('Local model revision/profile mismatch')
+                mode = ready.get('control_mode', 'joint_pos')
+                internal_dim = ready.get('internal_action_dim', self.model['action_dim'])
+                expected_mode = (self.llm_control_mode if self.model.get('model_type') == 'llm'
+                                 else 'joint_pos')
+                expected_dim = (7 if expected_mode == 'eef_delta_pose' else self.model['action_dim'])
+                if mode != expected_mode or internal_dim != expected_dim:
+                    raise ProtocolError('Local control mode or internal action dimension differs from Client config')
+                self.native_control_mode = mode
+                self.native_action_dim = internal_dim
                 if self.use_local_action_contract:
                     extra = {}
                     raw_message = ready.get('message')
@@ -143,7 +157,8 @@ class LocalPolicyClient(ColosseumClient):
                             or effective.get('subfolder', '') != self.router_model.get('subfolder', '')):
                         raise ProtocolError('Local effective model identity mismatch')
                     if (dimensions.get(effective.get('action_space')) != effective.get('action_dim')
-                            or effective.get('control_hz') != self.robot_spec.control_hz):
+                            or (effective.get('model_type') != 'llm'
+                                and effective.get('control_hz') != self.robot_spec.control_hz)):
                         raise ProtocolError('Local effective model does not support this robot action contract')
                     self.model = effective
                 break

@@ -99,7 +99,9 @@ def export_trial(path: Path, cameras: list[str], *, fps: int, robot_type: str,
                "cameras": cameras, "policy": json.loads(policy_path.read_text()) if policy_path.exists() else None,
                "timestamp_semantics": "frame_index / nominal control FPS; no resampling",
                "capture_timestamp_semantics": "original seconds since recorder start",
-               "action_semantics": "selected command; not measured execution"}
+               "action_semantics": ("driver-accepted joint command after EEF IK"
+                                    if metadata.get("action_recording") == "accepted_joint_commands_after_eef_ik"
+                                    else "selected command; not measured execution")}
     if robot_type == "yam":
         context["state_action_order"] = "left_joint_1..6,left_gripper,right_joint_1..6,right_gripper"
         context["state_action_units"] = "radians; grippers normalized 0 closed, 1 open"

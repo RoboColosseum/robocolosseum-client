@@ -18,6 +18,7 @@ import time
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+import numpy as np
 
 from .adapters import make_robot
 from .diagnostics import read_observation, execute_robot_action_async, close_resources
@@ -62,7 +63,7 @@ class EvalAPI:
     def request(self, method, path, body=None):
         if method.upper() == 'POST' and path == '/next' and getattr(self.config, 'llm_api_urls', []):
             body = {**body, 'llm_api_urls': self.config.llm_api_urls,
-                    'llm_providers': list(self.config.llm_api_keys)}
+                    'llm_providers': self.config.llm_providers}
         response = self.client.request(method, '/api/eval' + path, json=body,
             timeout=1800 if path.endswith('/dataset/complete') else 30)
         if response.status_code == 409:
@@ -218,8 +219,19 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                 raise ProtocolError('Physical local trial requires operator confirmation before RobotEnv construction')
             options = {'before_start': confirm_live} if local_mode and not config.test else {}
             metadata = await client.connect(evaluation_run=run['id'], institution=config.institution, **options)
+            native_mode = getattr(client, 'native_control_mode', 'joint_pos')
+            trial_hz = (client.model['control_hz'] if local_mode and client.model.get('model_type') == 'llm'
+                        else config.control_hz)
+            if type(trial_hz) is not int or trial_hz <= 0:
+                raise ProtocolError('Assigned LLM control_hz must be a positive integer')
             if local_mode:
-                robot = await robot_call(robot_factory, config, action_space=client.model['action_space'])
+                mode = native_mode
+                if mode == 'eef_delta_pose' and not execute_action:
+                    raise ValueError('SO101 EEF recording requires action execution to capture accepted joint commands')
+                factory_options = {'action_space': client.model['action_space']}
+                if mode == 'eef_delta_pose':
+                    factory_options['control_mode'] = mode
+                robot = await robot_call(robot_factory, config, **factory_options)
                 # Optional driver hook: a rig may start some models from their own home pose.
                 prepare = getattr(robot, 'prepare_for_model', None)
                 if prepare is not None and execute_action and not config.test:
@@ -234,11 +246,14 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                 save(path / 'policy.json', {'run_id': run['id'], 'model': client.model})
             if config.recording:
                 save(path / 'recording-context.json', {
-                    'robot_type': config.robot_type, 'fps': config.control_hz,
+                    'robot_type': config.robot_type, 'fps': trial_hz,
                     'action_space': robot.action_space_name,
                     'execution_enabled': execute_action, 'test': config.test,
                     'joint_step_mode': getattr(robot, 'joint_step_mode', None),
-                    'action_recording': 'policy_targets',
+                    'native_control_mode': native_mode,
+                    'action_recording': ('accepted_joint_commands_after_eef_ik'
+                                         if local_mode and native_mode == 'eef_delta_pose'
+                                         else 'policy_targets'),
                     'joint_max_step': config.adapter_config.get('joint_max_step')})
                 record_cameras = trial_cameras(config, task)
                 print(f"Recording cameras: {record_cameras} (Router task cameras: {task['cameras']})", flush=True)
@@ -262,17 +277,31 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                     plan = await client.infer(observation, deadline_ms=config.deadline_ms)
                     actions = action_chunk(plan, control_step=step, expected_dim=robot.action_dim)
                     chunk_index = 0
+                    begin_chunk = getattr(robot, 'begin_chunk', None)
+                    if begin_chunk is not None:
+                        await robot_call(begin_chunk)
                     print(f'Received action chunk at step {step}: {len(actions)} actions (execution {"enabled" if execute_action else "skipped"}).', flush=True)
                 action = actions[chunk_index]
-                if recorder is not None:
+                eef_mode = local_mode and native_mode == 'eef_delta_pose'
+                if recorder is not None and not eef_mode:
                     recorder.add(current, action, captured_at=captured_at)
                 if local_mode:
                     await client.before_action(step)
-                await execute_robot_action_async(robot, action, step, robot_call, execute_action)
+                accepted = await execute_robot_action_async(robot, action, step, robot_call, execute_action)
+                if eef_mode:
+                    accepted = np.asarray(accepted, dtype=np.float32)
+                    if accepted.shape != (client.model['action_dim'],) or not np.isfinite(accepted).all():
+                        raise ValueError('SO101 EEF driver did not report a valid accepted joint command')
+                    if recorder is not None:
+                        recorder.add(current, accepted, captured_at=captured_at)
+                    path.mkdir(parents=True, exist_ok=True)
+                    with (path / 'eef-actions.jsonl').open('a', encoding='utf-8') as target_log:
+                        target_log.write(json.dumps({'step': step, 'eef_delta': np.asarray(action).tolist(),
+                                                     'accepted_joint_command': accepted.tolist()}) + '\n')
                 chunk_index += 1
                 step += 1
                 # Include observation, inference and execution in the control period.
-                await asyncio.sleep(max(0, 1/config.control_hz - (time.monotonic() - started)))
+                await asyncio.sleep(max(0, 1/trial_hz - (time.monotonic() - started)))
             if recorder is not None:
                 final_observation = await robot_call(robot.get_observation)
                 recorder.add(final_observation)
@@ -467,6 +496,8 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                         metadata={'assignment_id': assignment['id'], 'run_id': run['id'],
                             'side': run['side'], 'track': track, 'test': context['test'],
                             'action_space': context['action_space'],
+                            'native_control_mode': context.get('native_control_mode', 'joint_pos'),
+                            'action_recording': context.get('action_recording', 'policy_targets'),
                             'execution_enabled': context['execution_enabled'],
                             'institution': assignment.get('institution', config.institution),
                             'scene': assignment.get('scene', config.scene),

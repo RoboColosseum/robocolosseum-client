@@ -35,7 +35,7 @@ def require_secure_policy_url(url):
         raise ValueError('LLM keys require wss:// or a loopback ws:// SSH tunnel to Policy Server')
 
 
-def local_preparation(preparation, keys, policy_url):
+def local_preparation(preparation, keys, policy_url, account_logins=None):
     """Return a copy carrying only this model's key; never alter Router data."""
     model = preparation['model']
     if model.get('model_type', 'vla') != 'llm':
@@ -45,6 +45,9 @@ def local_preparation(preparation, keys, policy_url):
                      [('gpt-', 'openai'), ('grok-', 'xai'), ('claude-', 'anthropic')]
                      if model.get('name', '').startswith(prefix)), None)
     key = keys.get(provider)
+    account = (account_logins or {}).get(provider)
+    if account == 'claude-code' and provider == 'anthropic':
+        return {**preparation, 'llm_auth': 'claude-code'}
     if not key:
         raise ValueError('Assigned LLM has no matching Client API key')
     return {**preparation, 'api_key': key}

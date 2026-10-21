@@ -300,7 +300,10 @@ result submission before a fresh start; it cannot revive a replaced assignment.
 
 
 The end-to-end tests use simulated hardware and real local HTTP/WebSocket/ffmpeg video
-uploads. They are not validation of physical robot behavior or real S3 credentials.
+uploads. The video assertions also invoke `ffprobe`; install both executables
+before running the full suite. Run tests with `uv run --no-sync python -m pytest -q`
+so executables installed in `.venv/bin` are on `PATH`. These tests are not
+validation of physical robot behavior or real S3 credentials.
 
 
 With `COLOSSEUM_VIDEO_STORAGE=s3` on the router, evaluation MP4s upload directly from
