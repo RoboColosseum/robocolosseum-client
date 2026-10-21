@@ -279,6 +279,10 @@ def select_rover_task(api, config):
         return select_task(api, config.robot_type, config.test)
     try:
         mission = select_rover_mission(config, session)
+    except NoAssignment as exc:
+        # A bot without SDK-enabled missions: fall back to the Router's registered tasks (goal by coordinates).
+        print(f'{exc}; choosing among the registered tasks instead.', flush=True)
+        return select_task(api, config.robot_type, config.test)
     finally:
         session.close()
     tasks = api.request('GET', '/tasks?robot_id=' + quote(config.robot_type, safe='') + ('&test=true' if config.test else ''))['tasks']

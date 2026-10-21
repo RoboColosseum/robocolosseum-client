@@ -24,7 +24,7 @@ from .telemetry import TelemetryStore, parse_report
 from .video import FrameStore
 
 VENDOR = Path(__file__).parent / 'vendor'
-PAGE_ORIGIN = 'http://rover.local'
+PAGE_ORIGIN = 'http://localhost'  # a secure context for the Agora web SDK; served from memory via page.route
 CAMERA_UIDS = {1000: FRONT_CAMERA, 1001: REAR_CAMERA}
 LAUNCH_ARGS = ['--ignore-certificate-errors', '--no-sandbox', '--autoplay-policy=no-user-gesture-required',
                '--use-fake-ui-for-media-stream', '--disable-application-cache', '--disk-cache-size=0']
@@ -175,8 +175,8 @@ class BrowserTransport:
                         self.frames.put(camera, data_url_to_rgb(packet['data_url']))
                     except Exception as exc:
                         self.errors.append(f'decode: {type(exc).__name__}')
-                elif isinstance(packet, dict) and packet.get('error'):
-                    self.errors.append(str(packet['error'])[:200])
+                elif isinstance(packet, dict) and packet.get('error') and self.frames.counts.get(camera, 0) == 0:
+                    self.errors.append(str(packet['error'])[:200])  # only before the first decoded frame
             await asyncio.sleep(max(0.0, period - (time.monotonic() - started)))
 
     async def _close_page(self):

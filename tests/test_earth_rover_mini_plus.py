@@ -490,3 +490,16 @@ def test_frodobots_link_switches_between_preview_and_ride(monkeypatch):
     assert [call for call in calls if call[0] in ('start_ride', 'end_ride')] == [('start_ride', 'plaza'), ('end_ride', 'plaza')]
     link.close()
     assert not link.started and Video.instances[-1].closed
+
+
+
+def test_bot_without_missions_falls_back_to_registered_tasks(tmp_path, monkeypatch):
+    session = FakeSession()
+    session.mission_list = []
+    monkeypatch.setattr(e, 'rover_session', lambda config: session)
+    class API:
+        def request(self, method, path):
+            return {'tasks': [{'id': 'gps-15m', 'instruction': 'Drive 15 m north', 'goal': {'type': 'gps'}}]}
+    monkeypatch.setattr('builtins.input', lambda prompt: '1')
+    assert e.select_rover_task(API(), rover_config(tmp_path, link='frodobots')) == 'gps-15m'
+    assert session.closed
