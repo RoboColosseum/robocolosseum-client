@@ -25,7 +25,7 @@ so101 = ["lerobot[feetech,intelrealsense]>=0.6,<0.7; python_version >= '3.12'"]
 yam = ["pyrealsense2>=2.55,<3"]  # Install the pinned I2RT SDK separately; see docs/yam.md.
 modelscope = ["modelscope-hub>=0.4.5,<0.5"]
 # Agora RTC/RTM client for the Earth Rover Mini+ link; Linux x86_64 for real runs, macOS 13+ for development.
-earth-rover = ["agora-python-server-sdk==2.4.9"]
+earth-rover = ["playwright==1.60.0", "agora-python-server-sdk==2.4.9"]
 huggingface = ["huggingface-hub>=1.0,<2"]
 dev = ["grpcio-tools>=1.66", "pytest>=8", "pytest-asyncio>=0.24"]
 

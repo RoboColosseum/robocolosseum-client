@@ -54,7 +54,18 @@ The ride is acquired through frodobots_web's programmatic endpoints
 (`/sdk/missions`, `/sdk/checkpoints_list`, `/sdk/start_ride`, `/sdk/end_ride`)
 with the configured `bot_slug` and the chosen mission, and released when the
 adapter closes; a trial without a mission falls back to the SDK's token-only
-session (`/sdk/token`), which has no ride and no platform-side recording. Video arrives over the ride's Agora channel (front camera uid 1000,
+session (`/sdk/token`), which has no ride and no platform-side recording.
+
+The rover itself is reached the way the Earth Rovers SDK does it: a headless
+Google Chrome page (`robots/earth_rover/vendor/rover.html`, driven by
+Playwright) joins the ride's Agora RTC channel for the cameras and logs into
+Agora RTM 1.x for commands and telemetry (`transport: browser`, the default).
+Measured on a Mini: ~10 fps per camera with 50 ms median frame age, telemetry
+every 0.5 s, commands dispatched in ~4 ms and the stop acknowledged in ~0.5 s.
+Google Chrome is preferred because it decodes the rover's H.264 stream; set
+`chrome_executable_path` for another codec-capable browser. `transport: native`
+uses the Agora Python SDK instead, but its RTM client is 2.x and cannot receive
+the rover's 1.x telemetry. Video arrives over the ride's Agora channel (front camera uid 1000,
 rear 1001); commands and telemetry are RTM peer messages to and from the rover.
 `scripts/earth_rover_link_check.py` exercises the link without the Router
 (frame age, telemetry rate, command round trip, confirmed stop) and is the

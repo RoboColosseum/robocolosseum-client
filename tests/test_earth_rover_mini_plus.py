@@ -474,7 +474,8 @@ def test_frodobots_link_switches_between_preview_and_ride(monkeypatch):
     monkeypatch.setattr(video_module, 'AgoraVideo', Video)
     monkeypatch.setattr(telemetry_module, 'RtmTelemetry', Telemetry)
     monkeypatch.setattr(commands_module, 'RtmRestSender', Sender)
-    link = module.FrodobotsRoverLink({'sdk_token': 'secret', 'bot_slug': 'frodobot_x', 'first_frame_timeout_s': 1}, ['front_image'], (2, 2))
+    link = module.FrodobotsRoverLink({'sdk_token': 'secret', 'bot_slug': 'frodobot_x', 'first_frame_timeout_s': 1, 'transport': 'native'},
+                                     ['front_image'], (2, 2))
     link.session = FrodobotsSession('secret', 'frodobot_x', api_url='https://api.example/api/v1', transport=httpx.MockTransport(handler))
     link.start()  # preview
     assert link.started and link.mission_slug is None and Video.instances[-1].channel == 'ride_bot_frodobot_x'
