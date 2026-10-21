@@ -10,8 +10,7 @@ use_local_action_contract: true # Required when Router still advertises joint co
 llm_api_keys:
   openai: env:OPENAI_API_KEY
   xai: env:XAI_API_KEY
-llm_account_logins:
-  anthropic: claude-code # Login with the Claude CLI on the Policy Server host.
+  anthropic: env:ANTHROPIC_API_KEY
 control_hz: 30
 # Native capture is RGB 640x480 at 30 FPS per RealSense camera.
 cameras:

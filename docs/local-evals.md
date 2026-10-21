@@ -27,8 +27,7 @@ are checked out side by side.
   on a local port (8202–8206). Each LLM has `control_mode: joint_pos`.
 - Both configs share the same calibrated 12-joint bounds and `joint_max_step`.
   The Client's joint clipping applies to LLM and VLA actions alike.
-- GPT and Grok use your official OpenAI and xAI API keys. Claude uses the Claude
-  Code login on the Policy Server host.
+- GPT, Grok and Claude use your official OpenAI, xAI and Anthropic API keys.
 
 Both config files are git-ignored because they contain a Router token and
 machine-specific paths.
@@ -67,6 +66,7 @@ the Policy Server's `local-policy-logs/`.
    ```bash
    export OPENAI_API_KEY=...
    export XAI_API_KEY=...
+   export ANTHROPIC_API_KEY=...
    ```
 4. Install `ffmpeg`, which the review page uses to encode preview videos.
 
@@ -87,11 +87,6 @@ the Policy Server's `local-policy-logs/`.
    ```bash
    mkdir -p local
    cp configs/local-runtime-yam-local.yaml.example local/local-runtime-yam-agent-joint.yaml
-   ```
-4. Log in to Claude Code as the same operating-system user that starts the
-   Policy Server. The `claude` CLI must be on that user's `PATH`:
-   ```bash
-   claude auth login --claudeai
    ```
 
 ## Eval Station (one window instead of steps 1–5)
@@ -114,9 +109,8 @@ uv pip install --python .venv/bin/python -e '.[gui]'   # once
   `--server-config`) and stops it when you press Ctrl-C, which frees the GPU.
 - **API keys…** saves the OpenAI, xAI and Anthropic keys to `local/llm-keys.env` (owner-only).
   **Verify** checks each key with its provider, without spending tokens. The Router is offered
-  only the LLMs whose key works. If a key fails, the card turns red and names it. With no
-  Anthropic key saved, Claude uses the Claude Code login (`local/claude-account.env`), both as a
-  policy and to write feedback.
+  only the LLMs whose key works. If a key fails, the card turns red and names it. The Anthropic
+  key is used both for the Claude policy and to write feedback.
 - **Bring CAN up** asks for your password in a system pop-up. **Both arms respond** reads each
   motor's registers without powering it.
 - **STOP POLICY** (or Esc) ends the current run at once. Even an action already on its way is held
@@ -159,27 +153,21 @@ sleep 5; nvidia-smi   # if one is still listed: kill -TERM <pid>, and kill -KILL
 
 This only lists compute processes (model workers, Python), not the desktop/Xorg display.
 
-## 2. Claude login and Policy Server (Terminal 2)
+## 2. Start the Policy Server (Terminal 2)
 
 ```bash
 cd ~/colosseum-policy-server
-claude auth status --text
 uv run --no-sync colosseum-policy-local --config local/local-runtime-yam-agent-joint.yaml
 ```
-
-> [!TIP]
-> If the Claude session has expired, run `claude auth login --claudeai` in this
-> terminal, then restart the Policy Server.
 
 ## 3. Record a new evaluation (Terminal 3)
 
 Load the LLM API keys in the terminal that launches the recorder. The Client
-sends only the assigned model's key to the Policy Server. Claude uses the login
-from step 2.
+sends only the assigned model's key to the Policy Server.
 
 ```bash
 cd ~/colosseum-client
-source local/llm-keys.env          # sets OPENAI_API_KEY and XAI_API_KEY
+source local/llm-keys.env          # sets OPENAI_API_KEY, XAI_API_KEY and ANTHROPIC_API_KEY
 .venv/bin/python scripts/record_evals.py configs/robot.yam-joint-llm.yaml --scene '<scene>'
 ```
 
