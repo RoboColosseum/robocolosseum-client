@@ -38,11 +38,19 @@ class FrodobotsRoverLink:
         self.telemetry = None
         self.sender = None
         self.browser = None
+        self.lamp = 0
         self.started = False
 
     @property
     def mission_slug(self):
         return self.session.mission_slug or None
+
+    def set_lamp(self, on):
+        """Headlamp bit carried by every command from now on; it survives ride switches."""
+        self.lamp = 1 if on else 0
+        for component in (self.browser, self.sender):
+            if component is not None:
+                component.lamp = self.lamp
 
     def _open(self, mission_slug):
         """(Re)join the backend session: a ride on ``mission_slug``, or the token-only session when empty.
@@ -55,6 +63,7 @@ class FrodobotsRoverLink:
             from .browser import BrowserTransport
             if self.browser is None:
                 self.browser = BrowserTransport(cameras=self.cameras, chrome_executable=self.chrome_executable, codec=self.codec)
+            self.browser.lamp = self.lamp
             self.browser.open(self.credentials, first_frame_timeout=self.first_frame_timeout)
             deadline = time.monotonic() + self.first_frame_timeout
             while self.browser.telemetry.latest() is None and time.monotonic() < deadline:
@@ -67,6 +76,7 @@ class FrodobotsRoverLink:
         from .telemetry import RtmTelemetry
         from .video import AgoraVideo
         self.sender = RtmRestSender(self.credentials)
+        self.sender.lamp = self.lamp
         self.video = AgoraVideo(self.credentials, self.cameras)
         self.video.start()
         self.telemetry = RtmTelemetry(self.credentials)

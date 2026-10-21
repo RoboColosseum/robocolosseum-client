@@ -49,6 +49,7 @@ class BrowserTransport:
         self.quality = quality
         self.frames = FrameStore()
         self.telemetry = TelemetryStore()
+        self.lamp = 0  # headlamp bit carried by every command; the rover keeps it until told otherwise
         self.errors = []
         self.browser_name = ''
         self.loop = None
@@ -220,10 +221,9 @@ class BrowserTransport:
             self._thread.join(timeout=10)
 
     # --- the rover API ------------------------------------------------------
-    @staticmethod
-    def _payload(linear, angular, lamp=0):
+    def _payload(self, linear, angular):
         clip = lambda value: round(max(-1.0, min(1.0, float(value))), 3)
-        return {'linear': clip(linear), 'angular': clip(angular), 'lamp': int(lamp)}
+        return {'linear': clip(linear), 'angular': clip(angular), 'lamp': int(self.lamp)}
 
     def send(self, linear, angular):
         self._call(self._page.evaluate('(m) => window.sendMessage(m)', self._payload(linear, angular)), timeout=3)

@@ -85,6 +85,23 @@ an abort button for the running trial, a stop button for the session, and the
 submitted results with links to the Router admin and review API. It listens on
 localhost only; the policy server still runs separately.
 
+The page carries the SDK dashboard's map and drive controls (Leaflet 1.9.4 is
+vendored in `rover_ui_static/`; the tiles come from OpenStreetMap):
+
+- **Map**: the rover's position and heading from telemetry, a breadcrumb trail,
+  the selected mission's checkpoints (the destination pulses; 15 m circles),
+  the trial's GPS goal, and the distance left to the destination. "Follow
+  rover" keeps it centred; dragging the map turns that off.
+- **Drive**: d-pad or WASD/arrows while the rover is connected and no trial is
+  running (also between the trials of a session, to bring the rover back to
+  the start). A held key streams the command at 10 Hz and release sends one
+  zero, like the SDK; the operator process also zeros the rover if the page
+  goes silent for 0.5 s (tab closed, browser frozen). The speed slider scales
+  the ±1 command, **Lamp** toggles the headlamp bit carried by every command,
+  and **STOP** (or Space) sends a confirmed stop. When a trial adapter holds
+  the connection the controls are disabled and STOP aborts the trial instead.
+  `+angular` turns left, as in the FrodoBots command.
+
 ## Scoring
 
 At the end of each trial the operator enters the V4 score (0–4). It maps to the

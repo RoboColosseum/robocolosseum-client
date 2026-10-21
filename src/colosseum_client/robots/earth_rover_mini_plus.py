@@ -21,7 +21,7 @@ from PIL import Image
 from ..navigation import (ACTION_SPACE, FRONT_CAMERA, GOAL_GPS_KEY, GOAL_IMAGE, NAV_STATE_KEY,
                           NAV_STATE_NAMES, ROVER_CAMERAS)
 from ..robot_interface import Robot, RobotObservation
-from .earth_rover import make_link
+from .earth_rover import make_link, release_link
 
 FRONT_MAX_AGE_S = 2.0
 TELEMETRY_MAX_AGE_S = 3.0
@@ -165,6 +165,13 @@ class EarthRoverMiniPlusRobot(Robot):
     def _report_fault(self, exc):
         self._fault = exc
 
+    @property
+    def goal(self):
+        """The GPS destination of the current task, for the operator page's map."""
+        if self._goal_gps is None:
+            return None
+        return {'latitude': float(self._goal_gps[0]), 'longitude': float(self._goal_gps[1])}
+
     def _fit(self, pixels):
         pixels = np.asarray(pixels, dtype=np.uint8)
         if pixels.shape[:2] == (self.size[1], self.size[0]):
@@ -296,5 +303,8 @@ class EarthRoverMiniPlusRobot(Robot):
             if confirmed:
                 raise
             print(f'Earth Rover link close failed ({type(exc).__name__})', flush=True)
+        finally:
+            if getattr(self.link, 'shared', False):
+                release_link(self.link)
         if not confirmed:
             raise RuntimeError('Rover stop was not confirmed; check the rover before leaving it')

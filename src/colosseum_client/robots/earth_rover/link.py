@@ -52,6 +52,7 @@ class SimulatedRoverLink:
         self.state.update(latitude=float(start[0]), longitude=float(start[1]), battery=100.0)
         self.sent = []  # (linear, angular, sending thread, monotonic time)
         self.stops = 0
+        self.lamp = 0
         self.started = False
         self.closed = False
         self._lock = threading.Lock()
@@ -64,6 +65,9 @@ class SimulatedRoverLink:
         self.started = True
         self.mission_slug = mission_slug
         self._updated = time.monotonic()
+
+    def set_lamp(self, on):
+        self.lamp = 1 if on else 0
 
     def end_trial(self):
         """Shared connection: stop, leave the mission, keep the preview open."""
