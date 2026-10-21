@@ -86,9 +86,31 @@ def test_claude_account_advertises_provider_without_sending_api_key():
                    'model': {'model_type': 'llm', 'name': 'claude-opus-5-5',
                               'url': 'https://api.anthropic.com/v1'}}
     actual = decode_control(encode_control(local_preparation(
-        preparation, cfg.llm_api_keys, cfg.policy_server_url, cfg.llm_account_logins)))
-    assert actual['llm_auth'] == 'claude-code'
+        preparation, cfg.llm_api_keys, cfg.policy_server_url,
+        account_logins=cfg.llm_account_logins)))
+    assert json.loads(actual['message'])['client_options']['auth_method'] == 'claude-code'
     assert 'api_key' not in actual
-    with pytest.raises(ValueError, match='either an Anthropic API key'):
+    with pytest.raises(ValueError, match='Choose an API key'):
         config(llm_api_keys={'anthropic': 'key'},
+               llm_account_logins={'anthropic': 'claude-code'})
+
+
+def test_claude_account_login_is_declared_without_api_key():
+    cfg = config(llm_api_keys={'openai': 'openai-secret', 'xai': 'xai-secret'},
+                 llm_account_logins={'anthropic': 'claude-code'})
+    assert cfg.llm_providers == ['openai', 'xai', 'anthropic']
+    assert cfg.llm_api_urls == [
+        'https://api.openai.com/v1', 'https://api.x.ai/v1', 'https://api.anthropic.com/v1']
+    prepare = {'model': {'model_type': 'llm', 'name': 'claude-opus-5-5',
+                         'url': 'https://relay.example/v1'}}
+    actual = local_preparation(prepare, cfg.llm_api_keys, cfg.policy_server_url,
+                               account_logins=cfg.llm_account_logins)
+    assert json.loads(actual['message'])['client_options']['auth_method'] == 'claude-code'
+    assert 'api_key' not in actual
+    assert actual['model'] == prepare['model']
+
+
+def test_account_login_must_not_overlap_key():
+    with pytest.raises(ValueError, match='Choose an API key'):
+        config(llm_api_keys={'anthropic': 'secret'},
                llm_account_logins={'anthropic': 'claude-code'})

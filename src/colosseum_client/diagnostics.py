@@ -26,7 +26,7 @@ def read_observation(robot, step, phase):
 
 def execute_robot_action(robot, action, step, enabled=True):
     if enabled:
-        robot.execute(action)
+        return robot.execute(action)
 
 
 async def execute_robot_action_async(robot, action, step, robot_call, enabled=True):
@@ -36,4 +36,4 @@ async def execute_robot_action_async(robot, action, step, robot_call, enabled=Tr
     if execute is not None:
         return await execute(action, robot_call)
     else:
-        return await robot_call(robot.execute, action)
+        return await robot_call(execute_robot_action, robot, action, step, True)

@@ -74,7 +74,8 @@ class LocalPolicyClient(ColosseumClient):
         self.run_id = evaluation_run
         self.control = await connect(self.control_base + f'/api/eval/runs/{evaluation_run}/local',
             additional_headers={'Authorization': f'Bearer {self.router_token}', 'X-Colosseum-Institution': quote(self.institution,safe='')},
-            proxy=None, open_timeout=10, max_size=65536)
+            proxy=None, open_timeout=10, max_size=65536,
+            ping_interval=self.policy_ping_interval, ping_timeout=self.policy_ping_timeout)
         preparation = await receive_control(self.control)
         if preparation.get('type') != 'prepare' or preparation.get('run_id') != evaluation_run or preparation.get('protocol_version') != 1:
             raise ProtocolError('Invalid Router preparation')
@@ -99,7 +100,9 @@ class LocalPolicyClient(ColosseumClient):
         from .llm_credentials import local_preparation
         await self.connection.send(encode_control(
             local_preparation({**preparation, 'robot_type': self.hardware_robot_type},
-                              self.llm_api_keys, self.router_url, self.llm_account_logins)))
+                              self.llm_api_keys, self.router_url,
+                              account_logins=self.llm_account_logins,
+                              use_local_action_contract=self.use_local_action_contract)))
         async with timeout(self.prepare_timeout):
             while True:
                 ready = await receive_control(self.connection, self.prepare_timeout)
@@ -137,6 +140,9 @@ class LocalPolicyClient(ColosseumClient):
                 internal_dim = ready.get('internal_action_dim', self.model['action_dim'])
                 expected_mode = (self.llm_control_mode if self.model.get('model_type') == 'llm'
                                  else 'joint_pos')
+                if mode == 'eef_abs_pose' and self.use_local_action_contract:
+                    # YAM EE: the effective model in ready.message carries the action space.
+                    expected_mode = mode
                 expected_dim = (7 if expected_mode == 'eef_delta_pose' else self.model['action_dim'])
                 if mode != expected_mode or internal_dim != expected_dim:
                     raise ProtocolError('Local control mode or internal action dimension differs from Client config')
@@ -151,6 +157,8 @@ class LocalPolicyClient(ColosseumClient):
                             if isinstance(parsed, dict):
                                 extra = parsed
                     effective = extra.get('effective_model', ready.get('effective_model'))
+                    if effective is None and self.router_model.get('model_type', 'vla') != 'llm':
+                        effective = self.router_model
                     if (not isinstance(effective, dict)
                             or effective.get('url') != self.router_model.get('url')
                             or effective.get('revision') != self.router_model.get('revision')
@@ -335,7 +343,9 @@ class LocalPolicyClient(ColosseumClient):
             self.failure = exc
 
     async def before_action(self, step):
-        self._queue_report('step', 'step', step=step)
+        # Router local mode permits omitted step reports. Keep failure checks
+        # for cached actions while heartbeat and finish report lifecycle state.
+        self.ensure_active()
 
     async def infer(self, observation, *, deadline_ms=1000):
         self.ensure_active()

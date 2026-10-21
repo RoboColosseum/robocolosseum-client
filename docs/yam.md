@@ -70,8 +70,9 @@ the pinned SDK's mapping, endpoint clipper and normalized feedback under its
 command/state locks. Motor offsets themselves, arm gains, and thermal protections
 are unchanged. A remaining mismatch still aborts initialization.
 
-The Client prints one `yam_gripper_telemetry` JSON line per arm every second
-after initialization, including while policy inference is pending. Fields include
+Automatic periodic `yam_gripper_telemetry` output is disabled. The diagnostic
+helper remains available for explicit debugging; SDK thermal protection is unchanged.
+When manually enabled, it prints one JSON line per arm every second. Fields include
 `side`, CAN `channel`, `motor_id: 7`, `mos_temperature_c`, `rotor_temperature_c`,
 `effort_nm`, `position_rad`, `velocity_rad_s`, and `chain_running`. These are SDK
 feedback-cache readings; no additional CAN requests or motor commands are sent.

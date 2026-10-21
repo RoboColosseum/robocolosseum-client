@@ -414,6 +414,10 @@ The existing Policy Server outbound SDK does not yet implement this inbound prot
 Client/Router are implemented and mock-tested; a real model-serving implementation
 and hardware validation are still needed. Lifecycle reports are queued in the
 background; finishing a trial waits for Router confirmation before continuing.
+Local mode omits per-step reports and retains heartbeat and finish acknowledgments.
+It requires a Router that allows local runs to finish and submit with zero reported
+steps. Deploy that Router change before using this Client. The Client still enforces
+the task's maximum control steps locally.
 
 ### Verify WSS model delivery without a robot
 

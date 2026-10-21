@@ -44,26 +44,27 @@ class RobotClientConfig:
     image_height: int = 288
 
     @property
-    def llm_api_urls(self):
-        from .llm_credentials import API_URLS
-        return [API_URLS[name] for name in dict.fromkeys((*self.llm_api_keys, *self.llm_account_logins))]
+    def llm_providers(self):
+        return list(dict.fromkeys([*self.llm_api_keys, *self.llm_account_logins]))
 
     @property
-    def llm_providers(self):
-        return list(dict.fromkeys((*self.llm_api_keys, *self.llm_account_logins)))
+    def llm_api_urls(self):
+        from .llm_credentials import API_URLS
+        return [API_URLS[name] for name in self.llm_providers]
 
     def __post_init__(self) -> None:
         from .llm_credentials import resolve_keys, require_secure_policy_url
         keys = resolve_keys(self.llm_api_keys)
-        logins = dict(self.llm_account_logins)
-        if logins and logins != {'anthropic': 'claude-code'}:
-            raise ValueError('llm_account_logins currently supports only anthropic: claude-code')
-        if 'anthropic' in keys and 'anthropic' in logins:
-            raise ValueError('Use either an Anthropic API key or Claude Code account login')
-        if keys or logins:
+        if (not isinstance(self.llm_account_logins, Mapping)
+                or dict(self.llm_account_logins) != {'anthropic': 'claude-code'}
+                and self.llm_account_logins):
+            raise ValueError('llm_account_logins supports only anthropic: claude-code')
+        if set(keys) & set(self.llm_account_logins):
+            raise ValueError('Choose an API key or account login for each LLM provider')
+        if keys or self.llm_account_logins:
             require_secure_policy_url(self.policy_server_url)
         object.__setattr__(self, 'llm_api_keys', keys)
-        object.__setattr__(self, 'llm_account_logins', logins)
+        object.__setattr__(self, 'llm_account_logins', dict(self.llm_account_logins))
         if self.llm_control_mode not in {'joint_pos', 'eef_delta_pose'}:
             raise ValueError('llm_control_mode must be joint_pos or eef_delta_pose')
         if self.llm_control_mode == 'eef_delta_pose' and self.robot_type != 'so101':

@@ -197,7 +197,7 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                 raise ValueError('Local Policy evaluation currently supports robot_type: franka, yam or so101')
             from .local_policy import LocalPolicyClient
             joint_count, action_spaces = {
-                'yam': (12, {'joint_position': 14}),
+                'yam': (12, {'joint_position': 14, 'eef_abs_pose': 14}),
                 'so101': (5, {'joint_position': 6}),
             }.get(config.robot_type, (7, {'joint_position': 8, 'joint_velocity': 8, 'cartesian_position': 7}))
             client = LocalPolicyClient(
@@ -232,6 +232,11 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                 if mode == 'eef_delta_pose':
                     factory_options['control_mode'] = mode
                 robot = await robot_call(robot_factory, config, **factory_options)
+                prepare_trial = getattr(robot, 'prepare_for_trial', None)
+                if prepare_trial is not None:
+                    if not execute_action:
+                        raise ValueError('YAM EE evaluation requires action execution')
+                    await robot_call(prepare_trial, task['instruction'], run['id'])
                 # Optional driver hook: a rig may start some models from their own home pose.
                 prepare = getattr(robot, 'prepare_for_model', None)
                 if prepare is not None and execute_action and not config.test:
@@ -245,14 +250,16 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
             if local_mode:
                 save(path / 'policy.json', {'run_id': run['id'], 'model': client.model})
             if config.recording:
+                eef_control = robot.action_space_name == 'eef_abs_pose'
                 save(path / 'recording-context.json', {
                     'robot_type': config.robot_type, 'fps': trial_hz,
-                    'action_space': robot.action_space_name,
+                    'action_space': 'joint_position' if eef_control else robot.action_space_name,
                     'execution_enabled': execute_action, 'test': config.test,
                     'joint_step_mode': getattr(robot, 'joint_step_mode', None),
                     'native_control_mode': native_mode,
                     'action_recording': ('accepted_joint_commands_after_eef_ik'
                                          if local_mode and native_mode == 'eef_delta_pose'
+                                         else 'post_ik_sent_joint_commands' if eef_control
                                          else 'policy_targets'),
                     'joint_max_step': config.adapter_config.get('joint_max_step')})
                 record_cameras = trial_cameras(config, task)
@@ -283,13 +290,12 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                     print(f'Received action chunk at step {step}: {len(actions)} actions (execution {"enabled" if execute_action else "skipped"}).', flush=True)
                 action = actions[chunk_index]
                 eef_mode = local_mode and native_mode == 'eef_delta_pose'
-                if recorder is not None and not eef_mode:
-                    recorder.add(current, action, captured_at=captured_at)
                 if local_mode:
                     await client.before_action(step)
-                accepted = await execute_robot_action_async(robot, action, step, robot_call, execute_action)
+                sent = await execute_robot_action_async(robot, action, step, robot_call, execute_action)
                 if eef_mode:
-                    accepted = np.asarray(accepted, dtype=np.float32)
+                    # SO101 EEF: record the joint command the driver accepted after IK.
+                    accepted = np.asarray(sent, dtype=np.float32)
                     if accepted.shape != (client.model['action_dim'],) or not np.isfinite(accepted).all():
                         raise ValueError('SO101 EEF driver did not report a valid accepted joint command')
                     if recorder is not None:
@@ -298,6 +304,13 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                     with (path / 'eef-actions.jsonl').open('a', encoding='utf-8') as target_log:
                         target_log.write(json.dumps({'step': step, 'eef_delta': np.asarray(action).tolist(),
                                                      'accepted_joint_command': accepted.tolist()}) + '\n')
+                elif recorder is not None:
+                    if robot.action_space_name == 'eef_abs_pose':
+                        if sent is None:
+                            raise RuntimeError('YAM EE step returned no sent joint command')
+                        recorder.add(current, sent, captured_at=captured_at, policy_action=action)
+                    else:
+                        recorder.add(current, action, captured_at=captured_at)
                 chunk_index += 1
                 step += 1
                 # Include observation, inference and execution in the control period.
