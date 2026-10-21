@@ -78,6 +78,23 @@ def test_shared_relay_selects_key_by_model_name(name, provider):
         local_preparation(prepare, {k:v for k,v in keys.items() if k != provider}, 'ws://localhost:8000')
 
 
+def test_claude_account_advertises_provider_without_sending_api_key():
+    cfg = config(llm_account_logins={'anthropic': 'claude-code'})
+    assert cfg.llm_providers == ['anthropic']
+    assert cfg.llm_api_urls == ['https://api.anthropic.com/v1']
+    preparation = {'type': 'prepare', 'run_id': 'run',
+                   'model': {'model_type': 'llm', 'name': 'claude-opus-5-5',
+                              'url': 'https://api.anthropic.com/v1'}}
+    actual = decode_control(encode_control(local_preparation(
+        preparation, cfg.llm_api_keys, cfg.policy_server_url,
+        account_logins=cfg.llm_account_logins)))
+    assert json.loads(actual['message'])['client_options']['auth_method'] == 'claude-code'
+    assert 'api_key' not in actual
+    with pytest.raises(ValueError, match='Choose an API key'):
+        config(llm_api_keys={'anthropic': 'key'},
+               llm_account_logins={'anthropic': 'claude-code'})
+
+
 def test_claude_account_login_is_declared_without_api_key():
     cfg = config(llm_api_keys={'openai': 'openai-secret', 'xai': 'xai-secret'},
                  llm_account_logins={'anthropic': 'claude-code'})

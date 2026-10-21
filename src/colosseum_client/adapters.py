@@ -38,9 +38,9 @@ def load_adapter_factory(name: str):
     return factory
 
 
-def make_robot(config: RobotClientConfig, *, action_space: str = "joint_position") -> Robot:
+def make_robot(config: RobotClientConfig, *, action_space: str = "joint_position", control_mode: str = "joint_pos") -> Robot:
     if config.test or config.robot_type == 'test':
-        return TestRobot(config)
+        return TestRobot(config, control_mode=control_mode)
     if config.robot_type == 'yam' and action_space == 'eef_abs_pose':
         from .robots.yam_eef import YAMEEFRobot
         return YAMEEFRobot(config)
@@ -50,6 +50,8 @@ def make_robot(config: RobotClientConfig, *, action_space: str = "joint_position
     if config.robot_type == 'franka':
         return DroidRobot(config.cameras, action_space=action_space,
                           image_size=(config.image_width, config.image_height))
+    if config.robot_type == 'so101' and control_mode == 'eef_delta_pose':
+        return load_adapter_factory(config.robot_type)(config, control_mode=control_mode)
     return load_adapter_factory(config.robot_type)(config)
 
 
@@ -61,7 +63,7 @@ class TestRobot(Robot):
     action_dim = 8
     action_space_name = 'joint_position'
 
-    def __init__(self, config):
+    def __init__(self, config, *, control_mode='joint_pos'):
         import numpy as np
         self.robot_type = config.robot_type
         self.cameras = list(config.cameras)
@@ -70,6 +72,7 @@ class TestRobot(Robot):
         self.gripper = np.zeros(1, dtype=np.float32)
         self.eef_state = np.zeros(14, dtype=np.float32)
         self.step = 0
+        self.control_mode = control_mode
 
     def configure_model(self, model):
         import numpy as np
@@ -85,6 +88,8 @@ class TestRobot(Robot):
             if self.action_dim != 6:
                 raise ValueError('Synthetic SO101 requires 6-D joint_position')
             self.joint_count = 5
+            if self.control_mode == 'eef_delta_pose':
+                self.action_dim = 7
         self.joints = np.zeros(self.joint_count, dtype=np.float32)
 
     def get_observation(self):
@@ -96,13 +101,20 @@ class TestRobot(Robot):
             image[:,self.step % self.width,:] = 255
             images[camera] = image
         cartesian = self.eef_state.copy() if self.action_space_name == 'eef_abs_pose' else np.zeros(6,dtype=np.float32)
-        return RobotObservation(images, self.joints.copy(), self.gripper.copy(), cartesian)
+        extra = ({'eef_state': np.r_[np.zeros(6, dtype=np.float32), self.gripper].astype(np.float32),
+                  'eef_quat_wxyz': np.array([1, 0, 0, 0], dtype=np.float32)}
+                 if self.control_mode == 'eef_delta_pose' else {})
+        return RobotObservation(images, self.joints.copy(), self.gripper.copy(), cartesian, extra)
 
     def execute(self, action):
         import numpy as np
         value = np.asarray(action,dtype=np.float32)
         if value.shape != (self.action_dim,) or not np.isfinite(value).all():
             raise ValueError('Invalid dummy robot action')
+        if self.control_mode == 'eef_delta_pose':
+            self.gripper = np.clip(self.gripper + value[-1:], 0, 100)
+            self.step += 1
+            return np.r_[self.joints, self.gripper].copy()
         if self.robot_type == 'yam' and self.action_dim == 14 and self.action_space_name == 'joint_position':
             self.joints = np.r_[value[:6], value[7:13]]
             self.gripper = value[[6, 13]].copy()

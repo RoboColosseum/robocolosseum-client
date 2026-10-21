@@ -52,6 +52,9 @@ def local_preparation(preparation, keys, policy_url, *, account_logins=None,
         options['auth_method'] = 'claude-code'
         return {**preparation, 'message': json.dumps({'client_options': options})}
     key = keys.get(provider)
+    account = (account_logins or {}).get(provider)
+    if account == 'claude-code' and provider == 'anthropic':
+        return {**preparation, 'llm_auth': 'claude-code'}
     if not key:
         raise ValueError('Assigned LLM has no matching Client API key')
     result = {**preparation, 'api_key': key}
