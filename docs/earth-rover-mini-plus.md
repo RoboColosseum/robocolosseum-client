@@ -110,6 +110,25 @@ is vendored in `rover_ui_static/`; the tiles come from OpenStreetMap):
   the connection the controls are disabled and STOP aborts the trial instead.
   `+angular` turns left, as in the FrodoBots command.
 
+### Diagnostics
+
+The Diagnostics card shows what the link sees: whether it is streaming and on which channel (preview or ride),
+frames received per camera with the age of the newest one and the rate reaching the policy, telemetry age,
+which identities the rover is publishing (1000 front, 1001 rear), RTM command delivery counts, what this
+page's own video is playing, and the headless page's recent errors. Below it, timestamped events record
+connects, ride switches, trial start and end, and failures with a stream summary. **Copy diagnostics** puts the
+full dump on the clipboard; paste it into the issue when something fails.
+
+Two `adapter_config` knobs bound how old the newest data may be before a trial ends: `front_max_age_s`
+(default 2) and `telemetry_max_age_s` (default 3). Raise them a little on a weak 4G link; a policy must not act
+on a view seconds behind the rover, and the command watchdog stops the rover `command_ttl_s` after the last
+policy action regardless.
+
+When a session starts, the shared link leaves the preview channel and joins the ride's channel; the first
+observation waits for a frame from the new channel. When the trial ends, the ride is released, the link waits
+for the platform to clear the rover's channel, then requests the preview again (and retries once); if the rover
+does not come back, Disconnect and Connect.
+
 ## Scoring
 
 At the end of each trial the operator enters the V4 score (0–4). It maps to the

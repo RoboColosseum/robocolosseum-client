@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import deque
 import io
 import json
 import os
@@ -50,7 +51,7 @@ class BrowserTransport:
         self.frames = FrameStore()
         self.telemetry = TelemetryStore()
         self.lamp = 0  # headlamp bit carried by every command; the rover keeps it until told otherwise
-        self.errors = []
+        self.errors = deque(maxlen=50)  # recent page, capture and stop errors, shown by the operator page
         self.browser_name = ''
         self.loop = None
         self._thread = None
@@ -116,12 +117,14 @@ class BrowserTransport:
 
     # --- page lifecycle -----------------------------------------------------
     def open(self, credentials, *, first_frame_timeout=15.0):
-        """Join the ride's channel; returns once RTM is connected and the front camera decodes."""
+        """Join the ride's channel; returns once RTM is connected and the front camera decodes a frame from it."""
         self.start()
+        opened = time.monotonic()
         self._call(self._open(credentials), timeout=first_frame_timeout + 30)
         deadline = time.monotonic() + first_frame_timeout
         while time.monotonic() < deadline:
-            if FRONT_CAMERA in self.frames.latest():
+            latest = self.frames.latest().get(FRONT_CAMERA)
+            if latest is not None and latest[1] >= opened:  # from this channel, not the page that was just closed
                 return
             time.sleep(0.1)
         health = self.health()
@@ -138,6 +141,8 @@ class BrowserTransport:
 
     async def _open(self, credentials):
         await self._close_page()
+        self.frames.clear()  # the ride is another channel: nothing from the previous page may count as fresh
+        self.telemetry.clear()
         config = {'appid': credentials.app_id, 'channel': credentials.channel, 'uid': int(credentials.user_id),
                   'rtcToken': credentials.rtc_token, 'rtmToken': credentials.rtm_token, 'botUid': credentials.bot_uid,
                   'codec': self.codec}

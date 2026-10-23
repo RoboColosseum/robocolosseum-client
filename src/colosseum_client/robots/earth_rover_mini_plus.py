@@ -33,7 +33,8 @@ MAX_CONSECUTIVE_SEND_FAILURES = 5
 FAULT_AFTER_S = 2.0
 SETTINGS = {'bot_slug', 'mission_slug', 'checkpoint', 'frodobots_api_url', 'sdk_token', 'goal_dir', 'goal_gps', 'goal_image',
             'command_ttl_s', 'max_linear', 'max_angular', 'link', 'telemetry', 'timeout_s', 'stopped_s',
-            'first_frame_timeout_s', 'transport', 'chrome_executable_path', 'codec'}
+            'first_frame_timeout_s', 'transport', 'chrome_executable_path', 'codec',
+            'front_max_age_s', 'telemetry_max_age_s'}
 
 
 def resolve_secret(value):
@@ -137,6 +138,12 @@ class EarthRoverMiniPlusRobot(Robot):
         self.limits = (float(settings.get('max_linear', 1.0)), float(settings.get('max_angular', 1.0)))
         if any(not 0 < limit <= 1 for limit in self.limits):
             raise ValueError('max_linear and max_angular must be in (0, 1]')
+        # How old the newest front frame / telemetry may be before a trial ends: a 4G hiccup should not fail a
+        # trial, but a policy must not act on a view that is seconds behind the rover.
+        self.front_max_age_s = float(settings.get('front_max_age_s', FRONT_MAX_AGE_S))
+        self.telemetry_max_age_s = float(settings.get('telemetry_max_age_s', TELEMETRY_MAX_AGE_S))
+        if not 0 < self.front_max_age_s <= 30 or not 0 < self.telemetry_max_age_s <= 30:
+            raise ValueError('front_max_age_s and telemetry_max_age_s must be between 0 and 30 seconds')
         self.size = (config.image_width, config.image_height)
         self.goal_dir = Path(settings.get('goal_dir', 'goals'))
         self.goal_image_path = settings.get('goal_image')
@@ -172,6 +179,22 @@ class EarthRoverMiniPlusRobot(Robot):
             return None
         return {'latitude': float(self._goal_gps[0]), 'longitude': float(self._goal_gps[1])}
 
+    def _stream_hint(self):
+        """What the link saw when a stream went stale, for the session log."""
+        diagnostics = getattr(self.link, 'diagnostics', None)
+        if diagnostics is None:
+            return ''
+        try:
+            info = diagnostics()
+        except Exception:
+            return ''
+        rtm = info.get('rtm') or {}
+        front = (info.get('frames') or {}).get(FRONT_CAMERA) or {}
+        parts = [f"publishers {rtm.get('publishers')}", f"front frames {front.get('count')}", f"channel {info.get('channel')}"]
+        if info.get('errors'):
+            parts.append(f"last page error: {info['errors'][-1]}")
+        return '; ' + ', '.join(parts)
+
     def _fit(self, pixels):
         pixels = np.asarray(pixels, dtype=np.uint8)
         if pixels.shape[:2] == (self.size[1], self.size[0]):
@@ -191,15 +214,15 @@ class EarthRoverMiniPlusRobot(Robot):
             if camera not in frames:
                 raise RuntimeError(f'{camera} has not been received from the rover')
             pixels, received = frames[camera]
-            if camera == FRONT_CAMERA and now - received > FRONT_MAX_AGE_S:
-                raise RuntimeError(f'front_image is stale ({now - received:.1f}s old)')
+            if camera == FRONT_CAMERA and now - received > self.front_max_age_s:
+                raise RuntimeError(f'front_image is stale ({now - received:.1f}s old{self._stream_hint()})')
             images[camera] = self._fit(pixels)
         telemetry = self.link.latest_telemetry()
         if telemetry is None:
             raise RuntimeError('No rover telemetry received')
         values, received = telemetry
-        if now - received > TELEMETRY_MAX_AGE_S:
-            raise RuntimeError(f'rover telemetry is stale ({now - received:.1f}s old)')
+        if now - received > self.telemetry_max_age_s:
+            raise RuntimeError(f'rover telemetry is stale ({now - received:.1f}s old{self._stream_hint()})')
         try:
             vector = np.array([float(values[name]) for name in NAV_STATE_NAMES], dtype=np.float64)
         except (KeyError, TypeError, ValueError) as exc:

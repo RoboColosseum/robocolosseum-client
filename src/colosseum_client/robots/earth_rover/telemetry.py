@@ -50,6 +50,11 @@ class TelemetryStore:
         with self._lock:
             return None if self._latest is None else (dict(self._latest[0]), self._latest[1])
 
+    def clear(self):
+        with self._lock:
+            self._latest = None
+            self.received = 0
+
 
 class RtmTelemetry:
     """Receive the rover's peer messages with Agora's native RTM client, logged in as the ride user."""

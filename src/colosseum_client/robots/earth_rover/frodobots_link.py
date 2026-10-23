@@ -12,6 +12,11 @@ from ...navigation import FRONT_CAMERA
 from .session import DEFAULT_API_URL, FrodobotsSession
 
 STOP_BUDGET_S = 10.0
+# ``end_ride`` queues a shadow write that clears the rover's channel. It lands a moment later and would knock the
+# rover off a preview requested too early, so wait for it, then request the preview (another shadow write) and
+# retry once if the rover does not show up on it.
+PREVIEW_RESTORE_DELAY_S = 4.0
+PREVIEW_RESTORE_ATTEMPTS = 2
 
 
 class FrodobotsRoverLink:
@@ -123,11 +128,15 @@ class FrodobotsRoverLink:
                                'Check the rover, then end the ride from the FrodoBots app.')
         if self.session.mission_slug:
             self.session.end_ride()
-            try:
-                self._open('')
-            except Exception as exc:
-                self.started = False
-                print(f'Preview connection not restored ({type(exc).__name__}); reconnect from the page.', flush=True)
+            self.started = False
+            for attempt in range(1, PREVIEW_RESTORE_ATTEMPTS + 1):
+                time.sleep(PREVIEW_RESTORE_DELAY_S)
+                try:
+                    self._open('')
+                    return
+                except Exception as exc:
+                    print(f'Preview connection not restored (attempt {attempt}: {type(exc).__name__}: {str(exc)[:160]})', flush=True)
+            print('Preview connection lost after the ride; Disconnect, then Connect again from the page.', flush=True)
 
     def latest_frames(self):
         if self.browser is not None and self.started:
@@ -163,6 +172,32 @@ class FrodobotsRoverLink:
 
     def health(self):
         return self.browser.health() if self.browser is not None else {}
+
+    def diagnostics(self):
+        """Stream health for the operator page: frame counts and ages, telemetry age, RTM stats, recent page errors."""
+        now = time.monotonic()
+        info = {'transport': self.transport, 'started': self.started, 'mission': self.mission_slug,
+                'channel': self.credentials.channel if self.credentials is not None else None,
+                'frames': {}, 'telemetry': None, 'rtm': {}, 'errors': []}
+        try:
+            frames = self.latest_frames()
+            latest = self.latest_telemetry()
+        except Exception as exc:
+            info['error'] = f'{type(exc).__name__}: {exc}'[:200]
+            return info
+        frame_store = self.browser.frames if self.browser is not None else getattr(self.video, 'store', None)
+        counts = frame_store.counts if frame_store is not None else {}
+        for camera in self.cameras:
+            received = frames.get(camera)
+            info['frames'][camera] = {'count': counts.get(camera, 0),
+                                      'age_s': None if received is None else round(now - received[1], 1)}
+        telemetry_store = self.browser.telemetry if self.browser is not None else getattr(self.telemetry, 'store', None)
+        if latest is not None:
+            info['telemetry'] = {'count': getattr(telemetry_store, 'received', None), 'age_s': round(now - latest[1], 1)}
+        if self.browser is not None:
+            info['rtm'] = self.browser.health()
+            info['errors'] = list(self.browser.errors)[-10:]
+        return info
 
     def close(self):
         """Confirmed stop, drop the media sessions, then release the ride; keep the ride if the stop is unconfirmed."""

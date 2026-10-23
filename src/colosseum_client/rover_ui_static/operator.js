@@ -190,8 +190,10 @@
   const RoverVideo = (function () {
     const FRONT_UID = 1000, REAR_UID = 1001;
     let client = null, current = null, switching = false, audioTrack = null, audioPlaying = false, snapshotTimer = null;
+    let connState = '', lastError = '';
+    const subscribed = {};  // 'uid:mediaType' of the tracks this page plays, for the diagnostics card
     const audioTracks = {};
-    function status(text, isError) { $('videoState').textContent = text; $('videoState').className = isError ? 'err' : 'muted'; }
+    function status(text, isError) { $('videoState').textContent = text; $('videoState').className = isError ? 'err' : 'muted'; if (isError) lastError = text; }
     function placeholder(text) { $('front-placeholder').hidden = !text; $('front-placeholder').textContent = text || ''; }
     function selectAudio() {  // prefer the front publisher; never play until the operator unmutes
       const next = audioTracks[FRONT_UID] || audioTracks[REAR_UID] || null;
@@ -208,6 +210,8 @@
       const old = client;
       client = null; current = null;
       Object.keys(audioTracks).forEach(uid => delete audioTracks[uid]);
+      Object.keys(subscribed).forEach(key => delete subscribed[key]);
+      connState = ''; lastError = '';
       selectAudio();
       $('rear-player').hidden = true;
       if (old) { try { await old.leave(); } catch (err) { /* already gone */ } }
@@ -215,12 +219,13 @@
     function join(video) {
       current = video;
       const me = client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
-      me.on('connection-state-change', s => { if (me === client) status(s === 'CONNECTED' ? 'live' : s.toLowerCase()); });
+      me.on('connection-state-change', s => { if (me === client) { connState = s; status(s === 'CONNECTED' ? 'live' : s.toLowerCase()); } });
       me.on('user-published', (user, mediaType) => {
         const uid = parseInt(user.uid, 10);
         if (uid !== FRONT_UID && uid !== REAR_UID) return;  // not other spectators nor the link's headless page
         me.subscribe(user, mediaType).then(() => {
           if (me !== client) return;
+          subscribed[(uid === FRONT_UID ? 'front' : 'rear') + ' ' + mediaType] = true;
           if (mediaType === 'video') {
             if (uid === REAR_UID) { $('rear-player').hidden = false; user.videoTrack.play('rear-player'); }
             else { placeholder(''); user.videoTrack.play('front-player'); }
@@ -231,6 +236,7 @@
       me.on('user-unpublished', (user, mediaType) => {
         const uid = parseInt(user.uid, 10);
         if (uid !== FRONT_UID && uid !== REAR_UID) return;
+        delete subscribed[(uid === FRONT_UID ? 'front' : 'rear') + ' ' + mediaType];
         if (mediaType === 'video') { if (uid === REAR_UID) $('rear-player').hidden = true; else placeholder('The rover stopped publishing video.'); }
         if (mediaType === 'audio') { delete audioTracks[uid]; selectAudio(); }
       });
@@ -264,7 +270,8 @@
       $('audio').textContent = audioPlaying ? 'Mute audio' : 'Unmute audio';
     };
     if (typeof AgoraRTC !== 'undefined' && AgoraRTC.setLogLevel) AgoraRTC.setLogLevel(2);
-    return { sync };
+    function state() { return { state: connState, channel: current ? current.channel : null, uid: current ? current.uid : null, playing: Object.keys(subscribed), error: lastError }; }
+    return { sync, state };
   })();
 
   /* ---------- Robot, mission and session ---------- */
@@ -338,6 +345,44 @@
         s.manual ? 'Manual control: hold a key or pad; release to stop.' : 'Connect to a rover to drive it.';
     }
   }
+  /* ---------- Diagnostics (what to look at when a trial fails) ---------- */
+  const fpsMemo = {};
+  function fpsOf(camera, count) {  // frames per second reaching the policy, from the link's counter between polls
+    const now = performance.now(), m = fpsMemo[camera] || (fpsMemo[camera] = { count, at: now, fps: null });
+    if (count < m.count) { m.count = count; m.at = now; m.fps = null; }  // a new channel reset the counter
+    else if (now - m.at >= 2000) { m.fps = (count - m.count) / ((now - m.at) / 1000); m.count = count; m.at = now; }
+    return m.fps;
+  }
+  function ageCell(age, limit) { return age === null || age === undefined ? '<span class="bad">none</span>' : `<span class="${age > limit ? 'bad' : ''}">${age}s old</span>`; }
+  function renderDiagnostics(s) {
+    $('events').textContent = (s.events || []).join('\n'); $('events').scrollTop = $('events').scrollHeight;
+    const d = s.diagnostics;
+    if (!d) { $('diag').className = 'muted'; $('diag').textContent = s.connected ? 'This link reports no stream details.' : 'Connect to a rover to see stream health.'; return; }
+    const v = RoverVideo.state(), rtm = d.rtm || {}, rows = [];
+    rows.push(['Link', `${d.transport || ''} · ${d.started ? 'streaming' : '<span class="bad">not streaming</span>'} · ${d.mission ? 'ride ' + d.mission : 'preview'} · channel ${d.channel || '—'}`]);
+    Object.entries(d.frames || {}).forEach(([camera, f]) => {
+      const fps = fpsOf(camera, f.count || 0);
+      rows.push([camera.replace('_image', ' camera'), `${f.count || 0} frames · newest ${ageCell(f.age_s, 2)}${fps === null ? '' : ' · ' + fps.toFixed(1) + ' fps to the policy'}`]);
+    });
+    rows.push(['Telemetry', d.telemetry ? `${d.telemetry.count ?? '?'} reports · newest ${ageCell(d.telemetry.age_s, 3)}` : '<span class="bad">none received</span>']);
+    const publishers = rtm.publishers || [];
+    rows.push(['Rover publishing', publishers.length ? publishers.map(u => u == 1000 ? 'front (1000)' : u == 1001 ? 'rear (1001)' : u).join(', ') : '<span class="bad">nothing</span>']);
+    rows.push(['Commands (RTM)', rtm.ready ? `logged in · ${rtm.dispatched || 0} sent, ${rtm.delivered || 0} delivered, ${rtm.failed || 0} failed${rtm.last_error ? ' · <span class="bad">' + rtm.last_error + '</span>' : ''}` : '<span class="bad">not logged in</span>' + (rtm.rtc_error ? ' · ' + rtm.rtc_error : '')]);
+    rows.push(['This page\'s video', v.channel ? `${v.state || 'joining'} on ${v.channel} · ${v.playing.length ? v.playing.join(', ') : 'no tracks yet'}${v.error ? ' · <span class="bad">' + v.error + '</span>' : ''}` : 'not joined']);
+    if (d.errors && d.errors.length) rows.push(['Headless page errors', d.errors.slice(-3).map(e => `<span class="bad">${e}</span>`).join('<br>')]);
+    if (d.error) rows.push(['Link error', `<span class="bad">${d.error}</span>`]);
+    $('diag').className = 'diag';
+    $('diag').innerHTML = '<table>' + rows.map(([k, val]) => `<tr><td>${k}</td><td>${val}</td></tr>`).join('') + '</table>';
+  }
+  $('copyDiag').onclick = async () => {
+    try {
+      const dump = await api('/api/diagnostics');
+      dump.page_video = RoverVideo.state();
+      await navigator.clipboard.writeText(JSON.stringify(dump, null, 2));
+      $('copyDiag').textContent = 'Copied'; setTimeout(() => { $('copyDiag').textContent = 'Copy diagnostics'; }, 1500);
+    } catch (e) { $('error').textContent = 'Copy failed: ' + (e.message || e); }
+  };
+
   async function poll() {
     try {
       const s = await api('/api/state');
@@ -350,7 +395,7 @@
       $('connectBtn').hidden = linked; $('disconnectBtn').hidden = !linked; $('disconnectBtn').disabled = s.running || s.link_phase === 'connecting';
       $('bot').disabled = linked;
       $('status').innerHTML = `Router ${s.router_ok ? '<span class="ok">reachable</span>' : '<span class="err">not reachable at ' + s.api_url + ' (start it: start-router.sh)</span>'} · Rover ${
-        s.link_phase === 'connected' ? '<span class="ok">connected' + (s.mission ? ' · riding ' + s.mission : ' (preview, no ride)') + '</span>' :
+        s.link_phase === 'connected' ? (s.link_live ? '<span class="ok">connected' + (s.mission ? ' · riding ' + s.mission : ' (preview, no ride)') + '</span>' : '<span class="muted">connected · no stream yet (switching channel; if this stays, Disconnect then Connect)</span>') :
         s.link_phase === 'connecting' ? '<span class="muted">connecting…</span>' :
         s.link_phase === 'error' ? '<span class="err">' + (s.link_error || 'connection failed') + '</span>' : '<span class="muted">not connected</span>'}`;
       renderPrompt(s.pending);
@@ -360,6 +405,7 @@
       $('telemetry').innerHTML = s.telemetry ? Object.entries(s.telemetry).map(([k, v]) => `<span class="chip">${k} ${v}</span>`).join(' ') : (s.link_phase === 'connecting' || s.running ? 'Connecting to the rover…' : 'Not connected. Enter the bot slug and press Connect.');
       renderMap(s.telemetry, s.goal);
       renderDrive(s);
+      renderDiagnostics(s);
       renderResults(s.results);
       $('admin').href = s.api_url + '/admin/overview'; $('review').href = s.api_url + '/api/eval/review/fine-tuning';
     } catch (e) { $('phase').textContent = 'page cannot reach the operator process'; }

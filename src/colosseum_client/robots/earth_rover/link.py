@@ -122,5 +122,18 @@ class SimulatedRoverLink:
             self._integrate(0.0, 0.0)
         return self.stop_ok if confirm else True
 
+    def diagnostics(self):
+        started = self.started
+        with self._lock:
+            frame, sent = self._frame, len(self.sent)
+        age = 10.0 if self.stale else 0.0
+        return {'transport': 'simulated', 'started': started, 'mission': getattr(self, 'mission_slug', None),
+                'channel': 'simulated' if started else None,
+                'frames': {camera: {'count': frame, 'age_s': age} for camera in self.cameras},
+                'telemetry': {'count': frame, 'age_s': age} if started and self.telemetry_enabled else None,
+                'rtm': {'ready': started, 'dispatched': sent, 'delivered': sent, 'failed': 0,
+                        'publishers': [1000, 1001] if started else []},
+                'errors': []}
+
     def close(self):
         self.closed = True

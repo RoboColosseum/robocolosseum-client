@@ -507,3 +507,74 @@ def test_bot_without_missions_falls_back_to_registered_tasks(tmp_path, monkeypat
     monkeypatch.setattr('builtins.input', lambda prompt: '1')
     assert e.select_rover_task(API(), rover_config(tmp_path, link='frodobots')) == 'gps-15m'
     assert session.closed
+
+
+def test_browser_open_waits_for_a_frame_from_the_new_channel(monkeypatch):
+    """Switching preview -> ride reuses the transport; the preview's last frame must not pass as the ride's first."""
+    from colosseum_client.robots.earth_rover.browser import BrowserTransport
+    from colosseum_client.robots.earth_rover.telemetry import TelemetryStore
+    from colosseum_client.robots.earth_rover.video import FrameStore
+    transport = BrowserTransport(cameras=['front_image'])
+    monkeypatch.setattr(transport, 'start', lambda: None)
+    monkeypatch.setattr(transport, '_call', lambda coroutine, timeout: coroutine.close())  # no Chrome in tests
+    transport.frames.put('front_image', np.zeros((2, 2, 3), dtype=np.uint8))  # the preview page's last frame
+    credentials = SimpleNamespace(app_id='a', channel='ride_1', user_id=7, rtc_token='r', rtm_token='m', bot_uid='bot')
+    with pytest.raises(RuntimeError, match='No front camera frame'):
+        transport.open(credentials, first_frame_timeout=0.3)
+    threading.Timer(0.1, lambda: transport.frames.put('front_image', np.zeros((2, 2, 3), dtype=np.uint8))).start()
+    transport.open(credentials, first_frame_timeout=2.0)  # a frame decoded after the join counts
+    store = FrameStore()
+    store.put('front_image', np.zeros((1, 1, 3), dtype=np.uint8))
+    store.clear()
+    assert store.latest() == {} and store.counts == {}
+    reports = TelemetryStore()
+    reports.update({'battery': 1})
+    reports.clear()
+    assert reports.latest() is None and reports.received == 0
+
+
+def test_end_trial_waits_out_the_ride_release_and_retries_the_preview(monkeypatch):
+    """end_ride queues a shadow write that clears the rover's channel; the preview is requested after it lands."""
+    from colosseum_client.robots.earth_rover import frodobots_link as module
+    monkeypatch.setattr(module, 'PREVIEW_RESTORE_DELAY_S', 0.0)
+    calls = []
+    link = module.FrodobotsRoverLink({'sdk_token': 'secret', 'bot_slug': 'frodobot_x'}, ['front_image'], (2, 2))
+    link.session = SimpleNamespace(mission_slug='plaza', end_ride=lambda: calls.append('end_ride'))
+    link.started = True
+    monkeypatch.setattr(link, 'stop', lambda confirm=True: True)
+
+    def flaky_open(mission_slug):
+        calls.append(('open', mission_slug))
+        if sum(1 for call in calls if call[0] == 'open') == 1:
+            raise RuntimeError('No front camera frame within 15s')
+        link.started = True
+    monkeypatch.setattr(link, '_open', flaky_open)
+    link.end_trial()
+    assert calls == ['end_ride', ('open', ''), ('open', '')] and link.started
+
+    def dead_open(mission_slug):
+        calls.append(('open', mission_slug))
+        raise RuntimeError('still nothing')
+    calls.clear()
+    link.started = True
+    monkeypatch.setattr(link, '_open', dead_open)
+    link.end_trial()  # both attempts failing leaves the link idle without raising: the page says to reconnect
+    assert not link.started and calls == ['end_ride', ('open', ''), ('open', '')]
+    assert link.diagnostics()['started'] is False and link.diagnostics()['frames'] == {'front_image': {'count': 0, 'age_s': None}}
+
+
+def test_staleness_limits_are_configurable(tmp_path, monkeypatch):
+    monkeypatch.setattr(rover, 'make_link', lambda settings, cameras, size: SimulatedRoverLink(cameras, size, stale=True))
+    tolerant = rover.EarthRoverMiniPlusRobot(rover_config(tmp_path, front_max_age_s=20, telemetry_max_age_s=20))
+    try:
+        assert tolerant.get_observation().images['front_image'].shape == (32, 64, 3)  # 10 s old is fine under 20 s
+    finally:
+        tolerant.close()
+    strict = rover.EarthRoverMiniPlusRobot(rover_config(tmp_path, front_max_age_s=1))
+    try:
+        with pytest.raises(RuntimeError, match=r'stale \(10\.\ds old; publishers \[1000, 1001\], front frames'):
+            strict.get_observation()  # the error carries what the link saw, for the session log
+    finally:
+        strict.close()
+    with pytest.raises(ValueError, match='front_max_age_s'):
+        rover.EarthRoverMiniPlusRobot(rover_config(tmp_path, front_max_age_s=0))

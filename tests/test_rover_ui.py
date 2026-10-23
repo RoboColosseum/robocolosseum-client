@@ -262,3 +262,19 @@ def test_state_carries_the_spectator_identity_for_the_page_to_play_video(page):
     assert state(call)['video'] is None  # the simulator issues no spectator token: the page falls back to snapshots
     operator.link.spectator = lambda: {'appid': 'app', 'channel': 'ride_bot_x', 'uid': 421, 'rtcToken': 'rtc-spectator'}
     assert state(call)['video'] == {'appid': 'app', 'channel': 'ride_bot_x', 'uid': 421, 'rtcToken': 'rtc-spectator'}
+
+
+def test_diagnostics_and_events_reach_the_page(page):
+    operator, call = page
+    assert state(call)['diagnostics'] is None
+    connect(call)
+    s = state(call)
+    assert s['link_live'] and s['diagnostics']['transport'] == 'simulated'
+    assert s['diagnostics']['rtm']['publishers'] == [1000, 1001] and 'front_image' in s['diagnostics']['frames']
+    assert any('Connected to frodobot_x' in line for line in s['events'])
+    status, body = call('/api/diagnostics')
+    dump = json.loads(body)
+    assert status == 200 and dump['bot'] == 'frodobot_x' and dump['diagnostics']['started'] and dump['events']
+    call('/api/disconnect', {})
+    assert any(line.endswith('Disconnected from the rover') for line in state(call)['events'])
+    assert state(call)['diagnostics'] is None

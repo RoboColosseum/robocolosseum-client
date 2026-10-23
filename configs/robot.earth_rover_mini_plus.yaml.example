@@ -23,6 +23,8 @@ adapter_config:
   sdk_token: env:FRODOBOTS_SDK_TOKEN       # Organizer sdk_access_token of a NON-admin account; env:NAME reads the environment
   goal_dir: goals                          # Fine-tuning photo goals: <goal_dir>/<task.goal.file>, checked against the task's sha256
   command_ttl_s: 1.0                       # Zeros are sent when no new action arrived within this time
+  # front_max_age_s: 2.0       # end the trial when the newest front frame is older than this; 4-5 on a weak 4G link
+  # telemetry_max_age_s: 3.0   # the same for the rover's RTM reports
   max_linear: 1.0                          # Scale applied to action[0] after clipping to [-1, 1]
   max_angular: 1.0                         # Scale applied to action[1]; +angular turns left
   timeout_s: 300                           # Open Track trial limit sent to the Router (Fine-tuning tasks carry their own)

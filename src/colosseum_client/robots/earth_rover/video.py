@@ -49,6 +49,12 @@ class FrameStore:
         with self._lock:
             return dict(self._frames)
 
+    def clear(self):
+        """A new channel starts empty: the previous page's last frame must not pass as a fresh one."""
+        with self._lock:
+            self._frames.clear()
+            self.counts.clear()
+
 
 class AgoraVideo:
     def __init__(self, credentials, cameras, *, log_path='agora_rtc.log'):

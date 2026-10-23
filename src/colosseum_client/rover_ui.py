@@ -141,6 +141,52 @@ class Operator:
         self.lamp = 0
         self.last_drive = (0.0, 0.0)
         self._router = (0.0, None)
+        self.events = deque(maxlen=200)  # timestamped page-level events: connect, ride, trial, failures
+        self._diag = (0.0, None)
+
+    def event(self, text):
+        stamp = time.strftime('%H:%M:%S')
+        self.events.append(f'{stamp} {text}')
+        print(f'[{stamp}] {text}', flush=True)
+
+    def diagnostics(self):
+        """The link's stream health, refreshed at most every 2 s (the browser transport asks its headless page)."""
+        link = self.link if self.link is not None else self._live_link()
+        if link is None or not hasattr(link, 'diagnostics'):
+            return None
+        checked, cached = self._diag
+        if cached is not None and time.monotonic() - checked < 2.0:
+            return cached
+        try:
+            cached = link.diagnostics()
+        except Exception as exc:
+            cached = {'error': f'{type(exc).__name__}: {exc}'[:200]}
+        self._diag = (time.monotonic(), cached)
+        return cached
+
+    def _diag_summary(self):
+        self._diag = (0.0, None)
+        info = self.diagnostics() or {}
+        front = (info.get('frames') or {}).get(FRONT_CAMERA) or {}
+        rtm = info.get('rtm') or {}
+        parts = [f"channel {info.get('channel')}", f"streaming {info.get('started')}",
+                 f"front frames {front.get('count')} (newest {front.get('age_s')}s)",
+                 f"telemetry {(info.get('telemetry') or {}).get('age_s')}s", f"publishers {rtm.get('publishers')}",
+                 f"commands {rtm.get('delivered')}/{rtm.get('dispatched')} delivered, {rtm.get('failed')} failed"]
+        if info.get('errors'):
+            parts.append(f"page errors {info['errors'][-3:]}")
+        return ', '.join(parts)
+
+    def diagnostics_dump(self):
+        """Everything worth pasting into a bug report (the page's Copy diagnostics button)."""
+        self._diag = (0.0, None)
+        link = self._live_link()
+        spectator = getattr(link, 'spectator', None)
+        video = spectator() if spectator is not None else None
+        return {'when': time.strftime('%Y-%m-%d %H:%M:%S'), 'bot': self.bot, 'phase': self.phase, 'error': self.error,
+                'link_phase': self.link_phase, 'link_error': self.link_error, 'trial_holds_link': self.claimed,
+                'video_channel': video.get('channel') if video else None, 'diagnostics': self.diagnostics(),
+                'events': list(self.events), 'log': list(self.log)[-40:]}
 
     # --- prompts and output -------------------------------------------------
     def ask(self, prompt, options=None):
@@ -196,9 +242,11 @@ class Operator:
                 use_shared_link(link, claim=self._claimed, release=self._released)
                 self.link = link
                 self.link_phase = 'connected'
+                self.event(f'Connected to {bot} (preview, no ride)')
             except Exception as exc:
                 self.link_error = f'{type(exc).__name__}: {exc}'[:300]
                 self.link_phase = 'error'
+                self.event(f'Connect to {bot} failed: {self.link_error}')
         threading.Thread(target=worker, name='colosseum-rover-connect', daemon=True).start()
 
     def disconnect(self):
@@ -210,6 +258,7 @@ class Operator:
         self.link_phase = 'disconnected'
         if link is not None:
             link.close()
+            self.event('Disconnected from the rover')
 
     def router_ok(self):
         checked, status = self._router
@@ -227,10 +276,13 @@ class Operator:
         with self.lock:
             self.claimed = True
         self.release_manual()
+        self.event('Trial took the rover link (manual drive off until it ends)')
 
     def _released(self):
         with self.lock:
-            self.claimed = False
+            was_claimed, self.claimed = self.claimed, False
+        if was_claimed:
+            self.event('Trial released the rover link')
 
     def _manual_link(self):
         link = self.link
@@ -326,17 +378,23 @@ class Operator:
         evaluation.INTERRUPT.clear()
         evaluation.STOP.clear()
         evaluation.ask = self.ask
+        self.event(f"Session started: bot {bot or '?'}, mission {mission or 'auto'}, checkpoint {checkpoint or 'last'}, "
+                   f"track {track or self.config.track}, {'execute actions' if execute else 'observe only'}")
 
         def worker():
             try:
                 with contextlib.redirect_stdout(self):
                     evaluation.run_evaluation(config, track=track or None, execute_action=execute)
                 self.phase = 'finished'
+                self.event('Session finished')
             except evaluation.SessionStopped:
                 self.phase = 'stopped'
+                self.event('Session stopped')
             except BaseException as exc:  # The page must show why the session ended.
                 self.error = f'{type(exc).__name__}: {exc}'[:400]
                 self.phase = 'failed'
+                self.event(f'Session failed: {self.error}')
+                self.event(f'Streams at failure: {self._diag_summary()}')
             finally:
                 self._released()  # every trial adapter is closed by now
 
@@ -344,6 +402,7 @@ class Operator:
         self.thread.start()
 
     def abort_trial(self):
+        self.event('Abort trial requested')
         evaluation.INTERRUPT.set()
 
     def stop_session(self):
@@ -420,7 +479,8 @@ class Operator:
                 'track': self.config.track, 'robot_type': self.config.robot_type,
                 'manual': self.manual_allowed(), 'trial': self.claimed, 'lamp': self.lamp,
                 'drive': list(self.last_drive), 'drive_error': manual.error if manual is not None else '',
-                'goal': robot.goal if robot is not None else None}
+                'goal': robot.goal if robot is not None else None,
+                'link_live': link is not None, 'diagnostics': self.diagnostics(), 'events': list(self.events)[-30:]}
 
     def missions(self, bot):
         settings = {**self.config.adapter_config, 'bot_slug': bot}
@@ -488,6 +548,7 @@ pre.log{margin:0;max-height:280px;overflow:auto;font:12px/1.5 ui-monospace,Menlo
 .pad-stop{grid-area:stop;font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--bad);border-color:#e3b3af}.pad-stop:not(:disabled):hover{background:#fbe9e7}
 .driveSide{display:grid;gap:8px;flex:1 1 200px;min-width:0}.driveSide input[type=range]{padding:0;width:100%}
 #driveStatus{font-size:13px;min-height:20px}
+pre.log.small{max-height:150px}.diag td:first-child{color:var(--muted);white-space:nowrap;width:1%}.bad{color:var(--bad);font-weight:600}
 </style></head><body>
 <header><div><h1>RoboColosseum · Earth Rover operator</h1><div class="phase" id="phase">idle</div></div>
 <div class="row"><button id="abort" class="danger" disabled>Abort trial</button><button id="stop" disabled>Stop session</button></div></header>
@@ -519,6 +580,10 @@ pre.log{margin:0;max-height:280px;overflow:auto;font:12px/1.5 ui-monospace,Menlo
 <button type="button" class="pad" data-dir="back" aria-label="Back" disabled>▼</button></div>
 <div class="driveSide"><label>Speed <b id="speedValue">30%</b><input type="range" id="speed" min="10" max="100" value="30" step="5"></label>
 <button id="lamp" disabled>Lamp on</button><div id="driveStatus" class="muted"></div></div></div></section>
+
+<section class="card"><div class="head"><h2>Diagnostics</h2><button id="copyDiag">Copy diagnostics</button></div>
+<div id="diag" class="muted">Connect to a rover to see stream health.</div>
+<pre class="log small" id="events"></pre></section>
 
 <section class="card prompt" id="promptCard" hidden><h2>Waiting for you</h2><div class="q" id="promptText"></div>
 <div class="choices" id="choices"></div><div class="row" id="freeText" hidden><label>Answer<input id="answer"></label><button id="send" class="primary">Send</button></div></section>
@@ -584,6 +649,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.operator.missions(bot))
             except Exception as exc:
                 self._json({'missions': [], 'error': f'{type(exc).__name__}: {exc}'[:300]})
+        elif parts.path == '/api/diagnostics':
+            self._json(self.operator.diagnostics_dump())
         elif parts.path == '/frame.jpg':
             frame = self.operator.frame_jpeg()
             if frame is None:
