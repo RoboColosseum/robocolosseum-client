@@ -2,6 +2,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Mapping
+from dataclasses import field
 
 import numpy as np
 
@@ -45,8 +46,8 @@ class Robot(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def execute(self, action: np.ndarray) -> None:
-        """Validate and execute one action using the hardware SDK."""
+    def execute(self, action: np.ndarray) -> np.ndarray | None:
+        """Validate and execute one action; EEF drivers return accepted joint commands."""
         raise NotImplementedError
 
     @abstractmethod

@@ -1,6 +1,6 @@
 """Record one Router A/B eval WITHOUT scoring or uploading anything; review it later in scripts/review_evals.py.
 
-  .venv/bin/python scripts/record_evals.py configs/robot.yam-eef-llm.yaml --scene "..." [--instruction "..."]
+  .venv/bin/python scripts/record_evals.py configs/robot.yam-joint-llm.yaml --scene "..." [--instruction "..."]
 
 Same flow as colosseum-robot (Router assignment, A runs, reset, B runs), but it stops before the score prompts:
 no scores, preference, feedback, videos or datasets are sent. The Router only has the assignment
@@ -72,9 +72,21 @@ def main():
         if not instruction:
             sys.exit('Instruction cannot be empty.')
         config = replace(config, instruction=instruction)
+    try:
+        eval_id = record(config, resume=a.resume, execute_action=not a.no_execute_action)
+    except KeyboardInterrupt:
+        print('\nInterrupted. Run again and enter an instruction to start a new evaluation.')
+        return
+    if eval_id:
+        print(f'\nRecorded {eval_id} locally. Nothing scored or uploaded.\n'
+              f'Review: .venv/bin/python scripts/review_evals.py --config {a.config}  ->  http://127.0.0.1:8765')
+
+
+def record(config, *, resume=None, execute_action=True, ask=builtins.input):
+    """Record A then B, stopping before scoring. Returns the eval ID, or None if nothing was recorded."""
     root = Path(config.evaluation_dir).resolve()
     before = {m.parent.name for m in root.glob('*/manifest.json')}
-    previous_pending = waiting(root) if not a.resume else []
+    previous_pending = waiting(root) if not resume else []
 
     # Defer every scoring step: no outcome prompt, no dataset export (it embeds the outcome), stop at Preference.
     ev.progress = lambda label: None
@@ -83,27 +95,24 @@ def main():
     def guarded_input(prompt=''):
         if prompt.startswith(('Preference', 'Feedback')):
             raise Recorded
-        return builtins.input(prompt)
+        return ask(prompt)
     ev.input = guarded_input  # module-level name shadows the builtin inside evaluation.py
     ev.print = lambda *x, **k: None if x and str(x[0]).startswith('LeRobot dataset saved') else builtins.print(*x, **k)
 
     try:
-        ev.run_evaluation(config, track='open', resume=a.resume, execute_action=not a.no_execute_action)
+        ev.run_evaluation(config, track='open', resume=resume, execute_action=execute_action)
     except Recorded:
         pass
-    except KeyboardInterrupt:
-        print('\nInterrupted. Run again and enter an instruction to start a new evaluation.')
-        return
     finally:
-        if not a.resume:
+        if not resume:
             created = [m for m in root.glob('*/manifest.json') if m.parent.name not in before]
             if created:
                 new_id = max(created, key=lambda m: m.stat().st_mtime).parent.name
                 mark_superseded(root, previous_pending, new_id)
-    mans = ([root / a.resume / 'manifest.json'] if a.resume else
+    mans = ([root / resume / 'manifest.json'] if resume else
             [m for m in root.glob('*/manifest.json') if m.parent.name not in before])
     if not mans:
-        return
+        return None
     m = max(mans, key=lambda path: path.stat().st_mtime)
     d = json.loads(m.read_text())
     if d.get('submitted') or 'result' in d:
@@ -113,9 +122,7 @@ def main():
     tmp = m.with_suffix('.tmp')
     tmp.write_text(json.dumps(d, indent=2))
     tmp.replace(m)
-    print(f'\nRecorded {m.parent.name} locally. Nothing scored or uploaded.\n'
-          f'Review: .venv/bin/python scripts/review_evals.py --config {a.config}  ->  http://127.0.0.1:8765')
-
+    return m.parent.name
 
 if __name__ == '__main__':
     main()

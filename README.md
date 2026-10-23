@@ -52,7 +52,34 @@ action retains its numeric record only; its image is not included in the dataset
 
 [Adding a new robot](docs/robot-adapters.md)
 
-[YAM local evaluations with VLAs and EE LLMs: record, review and submit](docs/local-evals.md)
+[YAM local evaluations with VLAs and LLMs: record, review and submit](docs/local-evals.md)
+
+### YAM Eval Station (GUI)
+
+Once the [one-time YAM setup](docs/local-evals.md#one-time-setup) is done,
+including gripper calibration with `scripts/calibrate_yam_gripper.py`, one
+browser page replaces the separate terminals for the Policy Server, recording
+and review:
+
+```bash
+uv pip install --python .venv/bin/python -e '.[gui]'   # once
+.venv/bin/python scripts/eval_gui.py
+# open http://127.0.0.1:8770
+```
+
+- **Setup** checks the GPU, CAN, both arms, the 3 cameras, the Router, the API
+  keys and the Policy Server, and shows a green tick for each one that passes.
+  It starts the Policy Server for you, and Ctrl-C stops it and frees the GPU.
+- **Record** takes the task, then runs A and B with live camera frames, a step
+  counter and a STOP button (or Esc).
+- **Review** collects scores, a preference and your observations, which
+  Claude Haiku turns into written feedback, then submits to the Router or
+  discards the evaluation.
+
+It defaults to joint control (`configs/robot.yam-joint-llm.yaml`). For EE
+control, pass `--config` and `--server-config`; see
+[EE control](docs/local-evals.md#ee-control-instead-of-joint-control). A
+software STOP is not an emergency stop, so keep the physical stop within reach.
 
 ## Reference
 

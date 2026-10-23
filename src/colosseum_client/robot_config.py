@@ -15,6 +15,7 @@ class RobotClientConfig:
     cameras: Mapping[str, str]
     llm_api_keys: Mapping[str, str] = field(default_factory=dict, repr=False)
     llm_account_logins: Mapping[str, str] = field(default_factory=dict)
+    llm_control_mode: str = "joint_pos"
     institution: str = ""
     scene: str = ""
     evaluator: str = ""
@@ -63,6 +64,11 @@ class RobotClientConfig:
         if keys or self.llm_account_logins:
             require_secure_policy_url(self.policy_server_url)
         object.__setattr__(self, 'llm_api_keys', keys)
+        object.__setattr__(self, 'llm_account_logins', dict(self.llm_account_logins))
+        if self.llm_control_mode not in {'joint_pos', 'eef_delta_pose'}:
+            raise ValueError('llm_control_mode must be joint_pos or eef_delta_pose')
+        if self.llm_control_mode == 'eef_delta_pose' and self.robot_type != 'so101':
+            raise ValueError('EEF LLM control currently supports only robot_type: so101')
         for name in ('policy_ping_interval', 'policy_ping_timeout'):
             if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
                 raise ValueError(f'{name} must be a positive integer in seconds')
@@ -111,7 +117,7 @@ class RobotClientConfig:
             "institution", "test", "use_local_action_contract", "scene", "evaluator", "track", "policy_server_url", "prepare_timeout",
             "robot_type", "adapter", "adapter_config", "api_url", "evaluation_dir", "recording", "skip_upload", "max_trial_steps",
             "url", "dataset_url", "dataset_token", "dataset_token_file",
-            "token", "llm_api_keys", "llm_account_logins",
+            "token", "llm_api_keys", "llm_account_logins", "llm_control_mode",
             "cameras",
             "instruction",
             "control_hz",
@@ -152,6 +158,7 @@ class RobotClientConfig:
             token=value["token"],
             llm_api_keys=value.get("llm_api_keys", {}),
             llm_account_logins=value.get("llm_account_logins", {}),
+            llm_control_mode=value.get("llm_control_mode", "joint_pos"),
             cameras={name: str(camera_id) for name, camera_id in cameras.items()} or (
                 {'front_image' if robot_type == 'earth_rover_mini_plus' else 'head_image': 'dummy'} if value.get('test', False) else {}),
             scene=value.get("scene", ""),

@@ -21,6 +21,10 @@ _CAMERA_TYPES = ('realsense', 'opencv')
 _RETURN_HZ = 30
 _CONNECT_ATTEMPTS = 3
 _SETTLE_SECONDS = 0.5
+# A wrist USB camera can drop off the bus when its cable flexes; the kernel
+# may need up to about a minute to re-enumerate it after a failed handshake.
+_CAMERA_RECOVERY_SECONDS = 90
+_CAMERA_RETRY_SECONDS = 1.0
 
 
 def _vector(value, size, name):
@@ -98,11 +102,12 @@ class SO101Robot(Robot):
     action_dim = 6
     action_space_name = 'joint_position'
 
-    def __init__(self, config):
+    def __init__(self, config, *, control_mode='joint_pos'):
         settings = dict(config.adapter_config)
         allowed = {'port', 'robot_id', 'calibration_dir', 'camera_types', 'camera_width',
                    'camera_height', 'camera_fps', 'joint_low', 'joint_high',
-                   'max_relative_target', 'return_to_start', 'return_step_deg', 'start_poses'}
+                   'max_relative_target', 'return_to_start', 'return_step_deg', 'start_poses',
+                   'eef_urdf_path'}
         if settings.keys() - allowed:
             raise ValueError(f'Unknown SO101 settings: {sorted(settings.keys() - allowed)}')
         port, robot_id = settings.get('port'), settings.get('robot_id')
@@ -115,10 +120,22 @@ class SO101Robot(Robot):
         self.high = _vector(settings.get('joint_high'), 5, 'joint_high')
         if np.any(self.low >= self.high):
             raise ValueError('SO101 requires joint_low < joint_high in degrees')
+        if control_mode not in {'joint_pos', 'eef_delta_pose'}:
+            raise ValueError(f'unsupported SO101 control mode: {control_mode}')
+        self.control_mode = control_mode
+        self.eef = None
+        if control_mode == 'eef_delta_pose':
+            if not settings.get('eef_urdf_path'):
+                raise ValueError('SO101 EEF control requires adapter_config.eef_urdf_path')
+            self.action_dim = 7
         max_relative_target = settings.get('max_relative_target')
         if max_relative_target is not None and (
                 type(max_relative_target) not in (int, float) or not 0 < max_relative_target <= 180):
             raise ValueError('max_relative_target must be degrees in (0, 180]')
+        # LeRobot accepts only float or dict here; an integer raises TypeError
+        # on the first send_action call. None disables its per-command clamp.
+        if max_relative_target is not None:
+            max_relative_target = float(max_relative_target)
         self.return_to_start = settings.get('return_to_start', True)
         if type(self.return_to_start) is not bool:
             raise ValueError('return_to_start must be true or false')
@@ -147,7 +164,11 @@ class SO101Robot(Robot):
         cameras = {role: (_camera_type(camera_id, camera_types.get(role)), camera_id, *sizes)
                    for role, camera_id in config.cameras.items()}
         self.image_size = (config.image_width, config.image_height)
+        if control_mode == 'eef_delta_pose':
+            from .so101_eef import SO101EEFController
+            self.eef = SO101EEFController(self, settings['eef_urdf_path'])
         self.follower, self.start, self.closed = None, None, False
+        self.eef_motion_failed = False
         try:
             self.follower = _open_follower(port, robot_id, calibration_dir, cameras, max_relative_target)
             # The operator places the arm in its rest pose before each trial.
@@ -178,18 +199,75 @@ class SO101Robot(Robot):
     def get_observation(self):
         if self.closed:
             raise RuntimeError('SO101 is closed')
-        raw = self.follower.get_observation()
+        raw = self._read_follower()
         positions = self._positions(raw)
         images = {role: self._image(raw, role) for role in self.follower.cameras}
+        try:
+            extra = self.eef.observe(positions) if self.eef is not None else {}
+        except Exception:
+            self.eef_motion_failed = True
+            raise
         return RobotObservation(images, positions[:5].astype(np.float32), positions[5:].astype(np.float32),
-                                np.empty(0, dtype=np.float32))  # FK is unavailable, not zero.
+                                np.empty(0, dtype=np.float32), extra)
+
+    def _read_follower(self):
+        """Read motors and cameras, reconnecting any camera whose USB link dropped."""
+        try:
+            return self.follower.get_observation()
+        except Exception as exc:
+            failed = self._failed_cameras()
+            if not failed:
+                raise
+            log.warning('SO101 camera(s) %s stopped (%s); reconnecting', ', '.join(failed), exc)
+            self._reconnect_cameras(failed, exc)
+            return self.follower.get_observation()
+
+    def _failed_cameras(self):
+        failed = []
+        for role, camera in self.follower.cameras.items():
+            try:
+                camera.read_latest()
+            except Exception:
+                failed.append(role)
+        return failed
+
+    def _reconnect_cameras(self, roles, cause):
+        # The arm holds its last commanded pose under torque while we wait.
+        deadline = time.monotonic() + _CAMERA_RECOVERY_SECONDS
+        for role in roles:
+            camera = self.follower.cameras[role]
+            while True:
+                try:
+                    camera.disconnect()
+                except Exception:
+                    log.debug('SO101 camera %s cleanup before reconnect failed', role, exc_info=True)
+                try:
+                    camera.connect()
+                    break
+                except Exception:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(f'SO101 camera {role} did not reconnect within '
+                                           f'{_CAMERA_RECOVERY_SECONDS}s; check its USB cable') from cause
+                    log.debug('SO101 camera %s reconnect attempt failed', role, exc_info=True)
+                    time.sleep(_CAMERA_RETRY_SECONDS)
+            log.warning('SO101 camera %s reconnected', role)
 
     def _send(self, positions):
-        self.follower.send_action({f'{motor}.pos': float(v) for motor, v in zip(MOTORS, positions)})
+        return self.follower.send_action({f'{motor}.pos': float(v) for motor, v in zip(MOTORS, positions)})
+
+    def begin_chunk(self):
+        if self.eef is not None:
+            self.eef.begin_chunk()
 
     def execute(self, action):
         if self.closed:
             raise RuntimeError('SO101 is closed')
+        if self.eef is not None:
+            try:
+                return self.eef.execute(action)
+            except Exception:
+                self.eef_motion_failed = True
+                raise
         value = _vector(action, 6, 'SO101 action')
         # Learned policies routinely overshoot calibrated ends by a fraction of a
         # degree; clamp to the configured range instead of aborting the trial.
@@ -197,8 +275,13 @@ class SO101Robot(Robot):
         value[5] = np.clip(value[5], *GRIPPER_RANGE)
         self._send(value)
 
+    def _joint_positions(self):
+        """Motor positions only, so homing still works after a camera is lost."""
+        raw = self.follower.bus.sync_read('Present_Position', num_retry=self.follower.config.num_read_retries)
+        return self._positions({f'{motor}.pos': value for motor, value in raw.items()})
+
     def _move_to(self, target):
-        current = self._positions(self.follower.get_observation())
+        current = self._joint_positions()
         steps = int(np.ceil(np.max(np.abs(target - current)) / self.return_step))
         for index in range(1, steps + 1):
             self._send(current + (target - current) * index / steps)
@@ -231,7 +314,7 @@ class SO101Robot(Robot):
         if self.follower is None:
             return
         errors = []
-        if self.return_to_start and self.start is not None:
+        if self.return_to_start and self.start is not None and not self.eef_motion_failed:
             try:
                 self._return_to_start()
             except Exception as exc:

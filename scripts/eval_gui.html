@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Eval Station</title>
+<style>
+:root{
+  --bg:#f3e8dc;--glass:rgba(255,250,244,.80);--glass2:rgba(255,248,240,.62);--edge:rgba(255,255,255,.65);--line:rgba(120,80,50,.16);
+  --fg:#2b1f17;--mut:#7c6656;--acc:#b4532a;--acc2:rgba(180,83,42,.12);--ok:#2f8a4c;--okbg:rgba(47,138,76,.13);
+  --bad:#c9372c;--badbg:rgba(201,55,44,.12);--warn:#b26a00;--warnbg:rgba(214,140,20,.15);--info:#3d63c9;--infobg:rgba(61,99,201,.12);
+  --A:#4565d8;--B:#c2457f;--shadow:0 1px 2px rgba(60,30,10,.06),0 10px 30px rgba(60,30,10,.10);--r:18px;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#17110d;--glass:rgba(34,26,21,.84);--glass2:rgba(44,34,28,.7);--edge:rgba(255,220,190,.10);--line:rgba(255,220,190,.12);
+  --fg:#f4e9df;--mut:#b5a191;--acc:#f08a5d;--acc2:rgba(240,138,93,.16);--ok:#5ccf86;--okbg:rgba(92,207,134,.14);
+  --bad:#ff6b5e;--badbg:rgba(255,107,94,.14);--warn:#f2b64e;--warnbg:rgba(242,182,78,.14);--info:#8aa6ff;--infobg:rgba(138,166,255,.14);
+  --A:#7d93ff;--B:#f07fb4;--shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px rgba(0,0,0,.35)}}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;min-height:100vh;color:var(--fg);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:transparent}
+/* background: CSS gradients painted once, no canvas or blur. Each step has its own colours, which
+   cross-fade over a second; the layer drifts slowly by transform only, which the GPU composites for free. */
+@property --c1{syntax:'<color>';inherits:true;initial-value:#f6b97c}
+@property --c2{syntax:'<color>';inherits:true;initial-value:#ef8f6d}
+@property --c3{syntax:'<color>';inherits:true;initial-value:#f9dcae}
+body{--c1:#f6b97c;--c2:#ef8f6d;--c3:#f9dcae;transition:--c1 1.2s,--c2 1.2s,--c3 1.2s}
+body[data-mood=record]{--c1:#f4a868;--c2:#e5785c;--c3:#fbe1b6}
+body[data-mood=A]{--c1:#f2a066;--c2:#8a9cf0;--c3:#f6cfa2}
+body[data-mood=B]{--c1:#f2a066;--c2:#e68ab8;--c3:#f6cfa2}
+body[data-mood=stop]{--c1:#ee6a58;--c2:#f08a5d;--c3:#f6b9a0}
+body[data-mood=done]{--c1:#a9dcab;--c2:#f2bf7d;--c3:#f7e2b9}
+body[data-mood=error]{--c1:#e7846f;--c2:#d9a27a;--c3:#f3cdb4}
+body[data-mood=review]{--c1:#f2c27f;--c2:#dfa37c;--c3:#f7e3c5}
+.bg{position:fixed;inset:-6vmax;z-index:-2;pointer-events:none;will-change:transform;animation:drift 45s ease-in-out infinite alternate;
+  background:radial-gradient(42% 48% at 20% 26%,var(--c1),transparent 72%),radial-gradient(40% 46% at 82% 30%,var(--c2),transparent 72%),
+    radial-gradient(55% 48% at 50% 96%,var(--c3),transparent 72%),radial-gradient(35% 35% at 60% 55%,rgba(255,255,255,.35),transparent 70%)}
+@keyframes drift{to{transform:translate3d(3vmax,-2vmax,0)}}
+@media (prefers-color-scheme:dark){.bg{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.bg{animation:none}}
+.vignette{position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(120% 90% at 50% 40%,transparent 55%,rgba(90,45,20,.10))}
+@media (prefers-color-scheme:dark){.vignette{background:radial-gradient(120% 90% at 50% 40%,transparent 50%,rgba(0,0,0,.35))}}
+.grain{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.035;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.glass,.card{background:var(--glass);border:1px solid var(--edge);box-shadow:var(--shadow)}
+.card{border-radius:var(--r);padding:20px;transition:transform .2s,box-shadow .2s}
+button{font:inherit;cursor:pointer;border-radius:12px;padding:10px 18px;background:var(--glass2);color:var(--fg);border:1px solid var(--line);transition:transform .15s,filter .15s,background .2s}
+button:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.04)}
+button:active:not(:disabled){transform:translateY(0) scale(.98)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--acc);color:#fff;border-color:transparent;font-weight:600;box-shadow:0 6px 18px color-mix(in srgb,var(--acc) 35%,transparent)}
+button.big{padding:14px 28px;font-size:17px;border-radius:14px}
+button.danger{background:var(--bad);color:#fff;border-color:transparent}
+button.ghost{background:transparent;border-color:transparent}
+button.small{padding:6px 12px;font-size:13px;border-radius:9px}
+input,textarea,select{font:inherit;color:var(--fg);background:var(--glass2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;width:100%}
+input:focus,textarea:focus,select:focus{outline:2px solid var(--acc);outline-offset:0;border-color:transparent}
+textarea{resize:vertical;min-height:90px}
+label{display:block;font-weight:600;font-size:12px;margin:14px 0 6px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
+.mut{color:var(--mut)}
+.eyebrow{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--acc)}
+header{position:sticky;top:0;z-index:5;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--bg) 82%,transparent)}
+.bar{max-width:1320px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:12px}
+.brand .logo{width:38px;height:38px;border-radius:12px 12px 6px 6px;background:linear-gradient(160deg,var(--acc),#e7a35a);display:grid;place-items:center;color:#fff;font:600 19px var(--serif);box-shadow:0 4px 14px color-mix(in srgb,var(--acc) 40%,transparent)}
+.brand b{font:600 20px var(--serif);letter-spacing:.02em}
+.steps{display:flex;gap:4px;margin-left:auto;padding:5px;border-radius:14px}
+.steps button{border:0;background:transparent;padding:8px 16px;display:flex;align-items:center;gap:8px;color:var(--mut)}
+.steps button.on{background:var(--acc2);color:var(--acc);font-weight:600}
+.steps .n{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:var(--line);color:var(--fg);transition:.2s}
+.steps button.on .n{background:var(--acc);color:#fff}
+.steps button.done .n{background:var(--ok);color:#fff}
+main{max-width:1320px;margin:0 auto;padding:28px 20px 70px}
+.view{display:none}.view.on{display:block;animation:rise .35s cubic-bezier(.2,.7,.2,1)}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.view.on{animation:none}}
+h1{font:500 40px/1.1 var(--serif);margin:6px 0 8px;letter-spacing:-.01em}
+h1 em{color:var(--acc)}
+h2{font-size:18px;margin:0}
+.lead{color:var(--mut);margin:0;max-width:640px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.spread{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.grid{display:grid;gap:16px}
+.checks{grid-template-columns:repeat(auto-fill,minmax(360px,1fr))}
+.check{display:flex;gap:14px;align-items:flex-start}
+.check:hover{transform:translateY(-2px)}
+.check .body{flex:1;min-width:0}
+.check .detail{color:var(--mut);font-size:14px;margin-top:2px;word-break:break-word}
+.check .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.ico{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;font-size:19px;font-weight:700;background:var(--glass2);color:var(--mut);border:1px solid var(--line);transition:.25s}
+.ico.ok{background:var(--ok);color:#fff;border-color:transparent;box-shadow:0 0 0 6px var(--okbg);animation:pop .35s}
+.ico.fail{background:var(--bad);color:#fff;border-color:transparent;box-shadow:0 0 0 6px var(--badbg)}
+.ico.running{border:3px solid var(--acc2);border-top-color:var(--acc);animation:spin .8s linear infinite;font-size:0;will-change:transform}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pop{0%{transform:scale(.6)}70%{transform:scale(1.12)}100%{transform:scale(1)}}
+.check.wide{grid-column:1/-1}
+.cams{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}
+.cam{position:relative;border-radius:14px;overflow:hidden;background:#000;aspect-ratio:4/3;display:grid;place-items:center;color:#998;font-size:13px}
+.cam img{width:100%;height:100%;object-fit:cover;display:block}
+.cam .tag{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.55);color:#fff;font-size:12px;padding:3px 9px;border-radius:20px;display:flex;gap:6px;align-items:center}
+.tick{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--ok);color:#fff;font-size:11px}
+.hero{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:24px}
+.two{display:grid;grid-template-columns:minmax(320px,440px) 1fr;gap:20px;align-items:start}
+@media(max-width:960px){.two{grid-template-columns:1fr!important}.cams{grid-template-columns:1fr}}
+.live{position:relative;background:#000;border-radius:var(--r);overflow:hidden;aspect-ratio:4/3;box-shadow:var(--shadow);transition:box-shadow .4s}
+.live.A{box-shadow:0 0 0 3px var(--A),var(--shadow)}.live.B{box-shadow:0 0 0 3px var(--B),var(--shadow)}
+.live.stopping{box-shadow:0 0 0 4px var(--bad),0 0 60px color-mix(in srgb,var(--bad) 45%,transparent)}
+.live img{width:100%;height:100%;object-fit:contain;display:block}
+.live .empty{position:absolute;inset:0;display:grid;place-items:center;color:#bba;text-align:center;padding:20px}
+.overlay{position:absolute;left:0;right:0;padding:14px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.overlay.top{top:0;background:linear-gradient(rgba(0,0,0,.5),transparent)}
+.overlay.bot{bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.6));flex-direction:column;align-items:stretch}
+.chip{background:rgba(20,14,10,.5);color:#fff;padding:6px 12px;border-radius:30px;font-weight:600;font-size:14px;display:inline-flex;align-items:center;gap:8px}
+.chip.A{background:var(--A)}.chip.B{background:var(--B)}
+.dot{position:relative;width:9px;height:9px;border-radius:50%;background:#ff4d4d}
+.dot::after{content:"";position:absolute;inset:0;border-radius:50%;background:#ff4d4d;animation:pulse 1.4s ease-out infinite}
+@keyframes pulse{from{transform:scale(1);opacity:.7}to{transform:scale(2.8);opacity:0}}
+.prog{height:8px;border-radius:8px;background:rgba(255,255,255,.2);overflow:hidden;margin-top:8px}
+.prog>div{height:100%;background:linear-gradient(90deg,#f5b26b,#e8704a);width:0;transition:width .3s}
+.stepnums{color:#fff;font-variant-numeric:tabular-nums;font-size:14px;display:flex;justify-content:space-between}
+.timeline{display:grid;gap:10px;margin:16px 0}
+.tl{display:flex;gap:12px;align-items:center;padding:12px 14px;border-radius:14px;background:var(--glass2);border:1px solid var(--line);transition:.25s}
+.tl .ico{width:30px;height:30px;font-size:14px;box-shadow:none}
+.tl.cur{border-color:var(--acc);background:var(--acc2)}
+/* the kill switch */
+.kill{width:100%;padding:22px 18px;border-radius:18px;border:0;background:radial-gradient(120% 140% at 50% 0%,#ff5a4a,#c4231a);color:#fff;
+  font-weight:800;font-size:22px;letter-spacing:.08em;display:flex;flex-direction:column;align-items:center;gap:4px;
+  box-shadow:0 10px 30px rgba(200,35,26,.45),inset 0 1px 0 rgba(255,255,255,.35);position:relative}
+.kill::after{content:"";position:absolute;inset:0;border-radius:inherit;border:3px solid rgba(255,90,70,.7);pointer-events:none;animation:ring 2s ease-out infinite}
+.kill small{font-weight:500;font-size:12px;letter-spacing:.02em;opacity:.9}
+.kill:hover:not(:disabled){filter:brightness(1.08)}
+@keyframes ring{from{transform:scale(1);opacity:1}to{transform:scale(1.06,1.22);opacity:0}}
+kbd{font:600 11px ui-monospace,monospace;border:1px solid rgba(255,255,255,.5);border-radius:5px;padding:1px 5px}
+.banner{border-radius:14px;padding:12px 16px;margin-bottom:16px;display:flex;gap:10px;align-items:flex-start}
+.banner.warn{background:var(--warnbg);color:var(--warn)}
+.banner.bad{background:var(--badbg);color:var(--bad)}
+.banner.ok{background:var(--okbg);color:var(--ok)}
+.banner.info{background:var(--infobg);color:var(--info)}
+details.log{margin-top:16px}
+details.log summary{cursor:pointer;color:var(--mut);font-size:14px}
+pre{background:var(--glass2);border:1px solid var(--line);border-radius:12px;padding:12px;max-height:280px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-word;margin:8px 0 0}
+.modal{position:fixed;inset:0;background:rgba(30,18,10,.55);display:none;place-items:center;z-index:20;padding:20px}
+.modal.on{display:grid;animation:rise .25s}
+.modal .card{max-width:540px;width:100%;padding:30px}
+.modal h2{font:500 26px var(--serif);margin-bottom:8px}
+.modal .acts{display:flex;gap:10px;justify-content:flex-end;margin-top:22px;flex-wrap:wrap}
+.revgrid{display:grid;grid-template-columns:310px 1fr;gap:20px;align-items:start}
+@media(max-width:960px){.revgrid{grid-template-columns:1fr}}
+.evlist{display:grid;gap:6px;max-height:76vh;overflow:auto;padding:8px}
+.evitem{text-align:left;padding:10px 12px 10px 14px;border-radius:12px;border:1px solid transparent;background:transparent;display:block;width:100%;position:relative;overflow:hidden}
+.evitem::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:4px;border-radius:4px;background:var(--st,var(--line))}
+.evitem.on{background:var(--acc2);border-color:var(--acc)}
+.evitem .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em;color:#fff;background:var(--st)}
+.st-review{--st:#d98b0b}.st-scored{--st:#3d63c9}.st-submitted{--st:#2f8a4c}.st-discarded{--st:#c9372c}.st-superseded{--st:#8c8178}.st-interrupted{--st:#c46a2a}
+.filters{display:flex;gap:6px;flex-wrap:wrap;padding:2px 10px 8px}
+.filters button{padding:5px 11px;font-size:13px;border-radius:20px;display:inline-flex;align-items:center;gap:6px}
+.filters button.on{background:var(--acc);color:#fff;border-color:transparent}
+.filters .n{font-size:11px;font-weight:700;min-width:18px;padding:0 5px;border-radius:10px;background:var(--line);text-align:center}
+.filters button.on .n{background:rgba(255,255,255,.25)}
+.ab{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:1100px){.ab{grid-template-columns:1fr}}
+.side{border-top:4px solid var(--sc)}
+.side.A{--sc:var(--A)}.side.B{--sc:var(--B)}
+.vmain{width:100%;border-radius:12px;background:#000;aspect-ratio:4/3;display:block}
+.vsmall{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.vsmall video{width:100%;border-radius:10px;background:#000;aspect-ratio:4/3}
+.score{display:flex;align-items:center;gap:14px;margin-top:6px}
+.score input[type=range]{flex:1;accent-color:var(--sc);padding:0;background:none;border:0}
+.score .num{width:84px;text-align:center;font-size:20px;font-weight:700}
+.factor{margin-top:18px}.fname{font-weight:700}
+.fsides{display:flex;justify-content:space-between;font-size:12px;color:var(--mut);margin:4px 0 6px}
+.fsides span:first-child{color:var(--A)}.fsides span:last-child{color:var(--B)}
+.scale{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--glass2)}
+.scale button{border:0;border-radius:0;border-left:1px solid var(--line);background:transparent;padding:14px 6px;font-size:13px;transition:background .15s,color .15s}
+.scale button:first-child{border-left:0}
+.scale button:hover:not(:disabled){transform:none;background:var(--acc2)}
+.scale button.sa.on{background:var(--A);color:#fff}.scale button.sb.on{background:var(--B);color:#fff}.scale button.mid.on{background:var(--fg);color:var(--bg)}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.seg button{padding:14px;font-weight:600}
+.seg button.on{background:var(--acc);color:#fff;border-color:transparent}
+.seg button[data-pref=A].on{background:var(--A)}.seg button[data-pref=B].on{background:var(--B)}
+.gen{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:18px 0 6px}
+.gen label{margin:0}
+.shimmer{background:linear-gradient(90deg,var(--glass2) 25%,var(--acc2) 50%,var(--glass2) 75%);background-size:200% 100%;animation:sh 1.2s linear infinite}
+@keyframes sh{to{background-position:-200% 0}}
+.keyrows{display:grid;gap:6px;margin-top:10px;min-width:0}
+.keyrow{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:10px;align-items:center;font-size:14px;line-height:1.25;padding:7px 10px;border-radius:10px;background:var(--glass2)}
+.keyrow .kname{min-width:0}.keyrow .kname b,.keyrow .kname small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.keyrow .kname small{color:var(--mut);font-size:12px}
+.keyrow .kdot{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:700;color:#fff;background:var(--ok)}
+.keyrow.bad .kdot{background:var(--bad)}.keyrow .kmsg{color:var(--mut);text-align:right}.keyrow.bad .kmsg{color:var(--bad);font-weight:600}
+code{font:12px ui-monospace,monospace;background:var(--glass2);padding:1px 5px;border-radius:5px}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--fg);color:var(--bg);padding:12px 20px;border-radius:14px;box-shadow:var(--shadow);z-index:30;opacity:0;transition:.25s;pointer-events:none;max-width:90vw}
+.toast.on{opacity:1;transform:translateX(-50%)}
+.pill{font-size:13px;padding:5px 12px;border-radius:20px;display:flex;gap:8px;align-items:center;color:var(--mut)}
+.pill .d{width:8px;height:8px;border-radius:50%;background:var(--mut)}
+.pill.ok .d{background:var(--ok);box-shadow:0 0 0 4px var(--okbg)}.pill.fail .d{background:var(--bad)}.pill.running .d{background:var(--warn)}
+</style>
+</head>
+<body>
+<div class="bg"></div><div class="vignette"></div><div class="grain"></div>
+<header><div class="bar">
+  <div class="brand"><div class="logo">E</div><div><b>Eval Station</b><div class="mut" style="font-size:12px" id="sub"></div></div></div>
+  <div class="pill glass" id="srvpill"><span class="d"></span><span>Policy Server</span></div>
+  <nav class="steps glass">
+    <button data-v="setup"><span class="n">1</span>Setup</button>
+    <button data-v="record"><span class="n">2</span>Record</button>
+    <button data-v="review"><span class="n">3</span>Review</button>
+  </nav>
+</div></header>
+
+<main>
+<!-- 1. SETUP -->
+<section class="view" id="v-setup">
+  <div class="hero">
+    <div><div class="eyebrow">Step one · once per session</div><h1>Get the robot <em>ready</em>.</h1><p class="lead">Run the checks after switching the rig on. Everything should turn green.</p></div>
+    <button class="primary big" id="runall">Run all checks</button>
+  </div>
+  <div class="grid checks" id="checks"></div>
+  <div class="spread" style="margin-top:24px">
+    <span class="mut" id="readymsg"></span>
+    <button class="primary big" id="toRecord">Continue to recording →</button>
+  </div>
+</section>
+
+<!-- 2. RECORD -->
+<section class="view" id="v-record">
+  <div id="rec-form">
+    <div class="hero"><div><div class="eyebrow">Step two · record</div><h1>Two policies. <em>One task.</em></h1><p class="lead">Describe the task. The Router picks two policies, A and B, and the robot tries the task once with each.</p></div></div>
+    <div id="pendingBanner"></div>
+    <div class="two">
+      <div class="card">
+        <label for="instruction" style="margin-top:0">Task for the robot</label>
+        <textarea id="instruction" placeholder="e.g. Pick up the red cup and place it on the plate"></textarea>
+        <label for="scene">Scene / location</label>
+        <input id="scene" placeholder="e.g. nus">
+        <div class="row" style="gap:12px">
+          <div style="flex:1;min-width:140px"><label for="evaluator">Your name</label><input id="evaluator" placeholder="optional"></div>
+          <div style="width:140px"><label for="maxsteps">Max steps</label><input id="maxsteps" type="number" min="1" step="1"></div>
+        </div>
+        <details style="margin-top:14px"><summary class="mut" style="cursor:pointer">Continue an interrupted evaluation</summary>
+          <label for="resume">Evaluation</label><select id="resume"><option value="">— start a new one —</option></select>
+        </details>
+        <button class="primary big" id="start" style="width:100%;margin-top:22px">Start evaluation</button>
+        <p class="mut" style="font-size:13px;margin:10px 0 0">You'll confirm before the robot moves. Keep the emergency stop within reach.</p>
+      </div>
+      <div>
+        <div class="live"><img id="pv" alt=""><div class="empty" id="pvEmpty">Top camera preview<br><button class="small" id="pvBtn" style="margin-top:10px">Show camera</button></div>
+          <div class="overlay top"><span class="chip">Top camera</span></div></div>
+        <p class="mut" style="font-size:13px">Check the scene looks right before you start.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="rec-run" style="display:none">
+    <div class="two" style="grid-template-columns:1fr minmax(300px,380px)">
+      <div class="live" id="liveBox"><img id="lv" alt=""><div class="empty" id="lvEmpty"></div>
+        <div class="overlay top"><span class="chip" id="sideChip">Policy</span><span class="chip" id="phaseChip"></span></div>
+        <div class="overlay bot"><div class="stepnums"><span id="stepTxt">Step 0</span><span id="pctTxt"></span></div><div class="prog"><div id="progBar"></div></div></div>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Task</div>
+        <div id="runTask" style="font:500 20px/1.3 var(--serif);margin-top:4px"></div>
+        <div class="timeline" id="timeline"></div>
+        <div id="runMsg" class="banner info" style="display:none"></div>
+        <div id="killBox">
+          <button class="kill" id="killBtn">■ STOP POLICY<small>Keeps the recording so far · arms return to zero · then the next policy <kbd>Esc</kbd></small></button>
+          <button id="doneBtn" style="width:100%;margin-top:10px">✓ Task done, end this run</button>
+          <p class="mut" style="font-size:12px;margin:10px 0 0">This is a software stop. In an emergency, press the physical stop button.</p>
+        </div>
+        <div id="doneBox" style="display:none"><button class="primary big" id="toReview" style="width:100%">Score this evaluation →</button></div>
+        <div id="errBox" style="display:none"><button class="big" id="backForm" style="width:100%">Back to the form</button></div>
+      </div>
+    </div>
+    <details class="log"><summary>Technical log</summary><pre id="log"></pre></details>
+  </div>
+</section>
+
+<!-- 3. REVIEW -->
+<section class="view" id="v-review">
+  <div class="revgrid">
+    <div class="card" style="padding:8px"><div class="spread" style="padding:10px 10px 6px"><h2>Evaluations</h2><button class="small ghost" id="refresh" title="Refresh">↻</button></div>
+      <div class="filters" id="filters"></div>
+      <div class="evlist" id="evlist"></div></div>
+    <div id="evdetail"><div class="card mut">Pick an evaluation on the left.</div></div>
+  </div>
+</section>
+</main>
+
+<div class="modal" id="modal"><div class="card">
+  <h2 id="mTitle"></h2><p class="mut" id="mBody" style="margin:0"></p>
+  <div id="mInput" style="display:none;margin-top:14px"><input id="mText"></div>
+  <div class="acts" id="mActs"></div>
+</div></div>
+<div class="modal" id="keysModal"><div class="card">
+  <h2>AI API keys</h2>
+  <p class="mut" style="margin:0">Keys stay on this computer, in <code>local/llm-keys.env</code>. Leave a box empty to keep its saved key.</p>
+  <div id="keyInputs"></div>
+  <div class="acts"><button class="big" id="keysCancel">Cancel</button><button class="primary big" id="keysSave">Save and verify</button></div>
+</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let ST=null, CFG={}, view='setup', evSel=null, lastPromptId=null;
+const CHECKS=[
+ ['gpu','GPU is free','Nothing else is using the graphics card.',[['Check','gpu'],['Free GPU','free_gpu']]],
+ ['can','Robot connection (CAN)','The cables from the computer to both arms.',[['Check','can'],['Bring CAN up','can_reset']]],
+ ['arms','Both arms respond','Every motor in the left and right arm answers. Nothing moves.',[['Check','arms']]],
+ ['cameras','Cameras','Top camera plus the two wrist cameras.',[['Capture','cameras']]],
+ ['router','Router connection','The Colosseum server that assigns policies and stores results.',[['Check','router']]],
+ ['keys','AI API keys','Keys for the GPT, Grok and Claude policies. Claude also writes the review feedback.',[['API keys…','__keys'],['Verify','keys']]],
+ ['server','Policy Server','Runs the policies on this computer.',[['Start','server'],['Stop','server_stop']]],
+];
+const REQUIRED=['can','arms','cameras','router','keys','server'];
+const api=(p,b)=>fetch(p,b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(async r=>{const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||r.statusText);return j});
+function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),3500)}
+const ICON={ok:'✓',fail:'!',idle:'·',running:''};
+// Live updates arrive many times a second; rewrite an element only when its content changed.
+function setHTML(sel,html){const e=$(sel);if(e._html!==html){e._html=html;e.innerHTML=html}}
+
+// ---- background mood: the CSS does the colours and the fade ----
+const AMB={mood(m){if(document.body.dataset.mood!==m)document.body.dataset.mood=m},camera(){}};
+function mood(){
+  const r=ST&&ST.run, active=ST&&(ST.recording||['done','error'].includes(r.phase));
+  let m=view;
+  if(view=='record'&&active)m=r.phase=='stopping'?'stop':r.phase=='done'?'done':r.phase=='error'?'error':(r.side||'record');
+  AMB.mood(m);AMB.camera(view=='record'&&(ST&&(ST.preview||ST.recording)));
+}
+
+function show(v){view=v;document.querySelectorAll('.view').forEach(e=>e.classList.toggle('on',e.id=='v-'+v));
+  document.querySelectorAll('.steps button').forEach(b=>b.classList.toggle('on',b.dataset.v==v));
+  if(v=='review')loadEvals();
+  if(v=='record'){loadResumable();if(ST&&!ST.recording&&!ST.preview)togglePreview(true)}else if(ST&&!ST.recording&&ST.preview)togglePreview(false);
+  mood()}
+document.querySelectorAll('.steps button').forEach(b=>b.onclick=()=>show(b.dataset.v));
+
+// ---- setup ----
+$('#checks').innerHTML=CHECKS.map(([k,t,d,acts])=>`<div class="card check ${k=='cameras'?'wide':''}" id="c-${k}">
+  <div class="ico" id="i-${k}">·</div><div class="body"><h2>${t}</h2>
+  <div class="detail" id="d-${k}">${d}</div>
+  ${k=='cameras'?'<div class="cams" id="camgrid"></div>':''}${k=='keys'?'<div class="keyrows" id="keyrows"></div>':''}
+  <div class="acts">${acts.map(([l,a])=>`<button class="small" data-a="${a}">${l}</button>`).join('')}</div></div></div>`).join('');
+document.querySelectorAll('#checks [data-a]').forEach(b=>b.onclick=()=>b.dataset.a=='__keys'?openKeys():api('/api/check/'+b.dataset.a,{}).catch(e=>toast(e.message)));
+$('#runall').onclick=()=>api('/api/check/all',{}).catch(e=>toast(e.message));
+$('#toRecord').onclick=()=>show('record');
+
+function renderChecks(){
+  for(const [k,,desc] of CHECKS){const c=ST.checks[k];const i=$('#i-'+k);if(i.className!='ico '+c.status){i.className='ico '+c.status;i.textContent=ICON[c.status]??'·'}
+    $('#d-'+k).textContent=c.detail||desc;}
+  const thumbs=ST.thumbs.join(),ok=ST.checks.cameras.status=='ok';
+  if($('#camgrid').dataset.k!==thumbs+ok){$('#camgrid').dataset.k=thumbs+ok;
+    $('#camgrid').innerHTML=(CFG.cameras||[]).map(c=>`<div class="cam">${ST.thumbs.includes(c)?`<img src="/api/thumb/${c}.jpg?${Date.now()}">`:'not captured'}
+      <span class="tag">${ST.thumbs.includes(c)?'<span class="tick">✓</span>':''}${{head_image:'Top',left_image:'Left wrist',right_image:'Right wrist'}[c]||c}</span></div>`).join('')}
+  const kr=JSON.stringify(ST.keys||[]);
+  if($('#keyrows').dataset.k!==kr){$('#keyrows').dataset.k=kr;
+    $('#keyrows').innerHTML=(ST.keys||[]).map(k=>`<div class="keyrow ${k.ok?'ok':'bad'}"><span class="kdot">${k.ok?'✓':'!'}</span><span class="kname"><b>${esc(k.label)}</b><small>${esc(k.source||'not set')}</small></span><span class="kmsg">${esc(k.msg)}</span></div>`).join('')}
+  const missing=REQUIRED.filter(k=>ST.checks[k].status!='ok');
+  $('#readymsg').innerHTML=missing.length?`Still needed: ${missing.map(k=>CHECKS.find(c=>c[0]==k)[1]).join(', ')}`:'<span style="color:var(--ok);font-weight:600">✓ All set. You can start recording.</span>';
+  document.querySelector('.steps [data-v=setup]').classList.toggle('done',!missing.length);
+  const s=ST.checks.server,p=$('#srvpill');p.className='pill glass '+s.status;p.querySelector('span:last-child').textContent='Policy Server: '+({ok:'running',running:'busy',fail:'stopped',idle:'stopped'}[s.status]);
+  $('#start').disabled=ST.recording;
+}
+
+function openKeys(){
+  const rows=ST&&ST.keys&&ST.keys.length?ST.keys:[{provider:'openai',label:'OpenAI · GPT'},{provider:'xai',label:'xAI · Grok'},{provider:'anthropic',label:'Anthropic · Claude'}];
+  $('#keyInputs').innerHTML=rows.map(k=>{const login=k.source=='Claude Code login';
+    return `<label for="key-${k.provider}">${esc(k.label)} ${k.source?`<span style="text-transform:none;font-weight:400">· ${login?'using the Claude Code login':'key saved'}${k.ok?' ✓':''}</span>`:''}</label>
+    <div class="row" style="flex-wrap:nowrap"><input id="key-${k.provider}" type="password" autocomplete="off" spellcheck="false" placeholder="${login?'leave empty to keep using the Claude Code login':k.source?'leave empty to keep the saved key':'paste key'}">
+    <button class="small" type="button" data-eye="${k.provider}">Show</button></div>`}).join('');
+  document.querySelectorAll('[data-eye]').forEach(b=>b.onclick=()=>{const i=$('#key-'+b.dataset.eye);i.type=i.type=='password'?'text':'password';b.textContent=i.type=='password'?'Show':'Hide'});
+  $('#keysModal').classList.add('on');
+}
+$('#keysCancel').onclick=()=>$('#keysModal').classList.remove('on');
+$('#keysSave').onclick=()=>{const body={};document.querySelectorAll('#keyInputs input').forEach(i=>body[i.id.slice(4)]=i.value);
+  api('/api/keys',body).then(()=>{$('#keysModal').classList.remove('on');toast('Saved. Checking each key…')}).catch(e=>toast(e.message))};
+
+// ---- record ----
+function togglePreview(on){api('/api/preview/'+(on?'start':'stop'),{}).then(r=>{if(on&&!r.ok)toast('Camera busy, try again shortly')}).catch(()=>{})}
+$('#pvBtn').onclick=()=>togglePreview(true);
+async function loadResumable(){
+  const evs=await api('/api/evals').catch(()=>[]);
+  const sel=$('#resume'),cur=sel.value;
+  sel.innerHTML='<option value="">— start a new one —</option>'+evs.filter(e=>e.state=='interrupted').map(e=>`<option value="${e.id}">${esc(e.instruction)} · ${new Date(e.time*1000).toLocaleString()}</option>`).join('');sel.value=cur;
+  const pend=evs.filter(e=>e.state=='review'||e.state=='scored');
+  $('#pendingBanner').innerHTML=pend.length?`<div class="banner warn">⚠ <div><b>“${esc(pend[0].instruction)}” is recorded but not submitted.</b> Starting a new evaluation closes it on the Router. <a href="#" id="goPend" style="color:inherit">Score it first</a></div></div>`:'';
+  if(pend.length)$('#goPend').onclick=e=>{e.preventDefault();evSel=pend[0].id;show('review')};
+}
+$('#start').onclick=async()=>{
+  const missing=REQUIRED.filter(k=>ST.checks[k].status!='ok');
+  if(missing.length&&!confirm('Some setup checks are not green yet. Start anyway?'))return;
+  const body={instruction:$('#instruction').value,scene:$('#scene').value,evaluator:$('#evaluator').value,max_steps:$('#maxsteps').value,resume:$('#resume').value};
+  try{localStorage.setItem('evform',JSON.stringify({scene:body.scene,evaluator:body.evaluator}))}catch(e){}
+  try{await api('/api/eval/start',body)}catch(e){toast(e.message)}
+};
+const stopRun=reason=>api('/api/eval/finish',{reason}).catch(e=>toast(e.message));
+$('#killBtn').onclick=()=>stopRun('stopped');
+$('#doneBtn').onclick=()=>stopRun('completed');
+addEventListener('keydown',e=>{if(e.key=='Escape'&&ST&&ST.run.phase=='running'&&!$('#modal').classList.contains('on')){e.preventDefault();stopRun('stopped')}});
+$('#toReview').onclick=()=>{evSel=ST.run.eval_id;api('/api/eval/reset',{});show('review')};
+$('#backForm').onclick=()=>api('/api/eval/reset',{});
+
+const PHASE={starting:'Starting',setup:'Waiting for you',prompt:'Waiting for you',loading:'Loading policy',running:'Running',stopping:'Stopping',homing:'Returning home',saving:'Saving',between:'Run finished',done:'Done',error:'Stopped'};
+function renderRun(){
+  const r=ST.run,active=ST.recording||['done','error'].includes(r.phase);
+  $('#rec-form').style.display=active?'none':'';$('#rec-run').style.display=active?'':'none';
+  if(!active)return;
+  if(view!='record'&&ST.recording&&r.phase=='prompt')show('record');
+  $('#runTask').textContent=r.instruction||'';
+  $('#liveBox').className='live '+(r.phase=='stopping'?'stopping':r.side||'');
+  $('#sideChip').className='chip '+(r.side||'');$('#sideChip').textContent=r.side?'Policy '+r.side:'Preparing';
+  $('#phaseChip').innerHTML=(r.phase=='running'?'<span class="dot"></span>':'')+(PHASE[r.phase]||r.phase);
+  const pct=r.max_steps?Math.min(100,r.step/r.max_steps*100):0;
+  $('#progBar').style.width=(['running','stopping','homing','saving'].includes(r.phase)?pct:0)+'%';
+  $('#stepTxt').textContent=`Step ${r.step} / ${r.max_steps||'–'}`;$('#pctTxt').textContent=r.phase=='running'?Math.round(pct)+'%':'';
+  const showFrame=['running','stopping'].includes(r.phase);
+  $('#lvEmpty').style.display=$('#lv').src&&showFrame?'none':'';
+  const idle=['error','done'].includes(r.phase);
+  setHTML('#lvEmpty',showFrame?'':`<div>${idle?'':'<div class="ico running" style="margin:0 auto 12px;width:44px;height:44px"></div>'}${esc(r.message||PHASE[r.phase]||'')}</div>`);
+  const sides=['A','B'],cur=sides.indexOf(r.side),done=r.phase=='done',err=r.phase=='error';
+  setHTML('#timeline',sides.map((s,i)=>{const st=done||i<cur||(i==cur&&r.phase=='between')?'ok':i==cur?(err?'fail':'running'):'idle';
+    return `<div class="tl ${i==cur&&!idle?'cur':''}"><div class="ico ${st}">${ICON[st]}</div><div><b>Policy ${s}</b><div class="mut" style="font-size:13px">${st=='ok'?'Recorded':st=='running'?PHASE[r.phase]:st=='fail'?'Stopped':'Waiting'}</div></div></div>`}).join('')
+    +`<div class="tl ${done?'cur':''}"><div class="ico ${done?'ok':'idle'}">${done?'✓':'·'}</div><div><b>Score both runs</b><div class="mut" style="font-size:13px">In Review</div></div></div>`);
+  const m=$('#runMsg');m.style.display=r.message?'':'none';m.className='banner '+(err||r.phase=='stopping'?'bad':done?'ok':'info');m.textContent=r.message;
+  $('#killBox').style.display=r.phase=='running'?'':'none';
+  $('#doneBox').style.display=done?'':'none';$('#errBox').style.display=err&&!ST.recording?'':'none';
+  const lg=$('#log'),txt=ST.log.join('\n');
+  if(lg.textContent!==txt){const stick=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;lg.textContent=txt;if(stick)lg.scrollTop=lg.scrollHeight}
+}
+function renderPrompt(){
+  const p=ST.prompt,m=$('#modal');
+  if(!p){m.classList.remove('on');lastPromptId=null;return}
+  if(p.id===lastPromptId)return;lastPromptId=p.id;
+  $('#mTitle').textContent=p.title;$('#mBody').textContent=p.body;$('#mInput').style.display=p.kind=='text'?'':'none';$('#mText').value='';
+  const acts={scene:[['Cancel evaluation','',null],['Start Policy '+(p.side||''),'primary','']],
+    confirm:[['Cancel','','n'],['Start robot','primary','y']],
+    text:[['Cancel','',null],['OK','primary','__text']],
+    recovery:[['Skip and release power','danger','skip'],['Retry return','primary','retry']]}[p.kind];
+  $('#mActs').innerHTML=acts.map(([l,c],i)=>`<button class="${c} big" data-i="${i}">${l}</button>`).join('');
+  $('#mActs').querySelectorAll('button').forEach(b=>b.onclick=()=>{let a=acts[b.dataset.i][2];
+    if(p.kind=='recovery'&&a=='skip'&&!confirm('Support both arms by hand first. Releasing power lets them drop. Continue?'))return;
+    if(p.kind=='scene'&&a===null&&!confirm('Cancel this evaluation? You can resume it later.'))return;
+    if(a=='__text')a=$('#mText').value;
+    api('/api/eval/reply',{kind:p.kind,answer:a});m.classList.remove('on')});
+  m.classList.add('on');if(p.kind!='recovery'&&view!='record')show('record');
+}
+
+// ---- review ----
+const LBL={review:'needs score',scored:'not submitted',submitted:'submitted',discarded:'discarded',superseded:'replaced',interrupted:'interrupted'};
+// "To review" = recorded but not yet submitted (needs a score, or scored but not sent)
+const FILTERS=[['all','All',()=>true],['todo','To review',e=>e.state=='review'||e.state=='scored'],
+  ['submitted','Submitted',e=>e.state=='submitted'],['discarded','Discarded',e=>e.state=='discarded']];
+let evFilter=(()=>{try{return localStorage.getItem('evfilter')||'todo'}catch(e){return 'todo'}})();
+async function loadEvals(){
+  const all=await api('/api/evals').catch(()=>[]);
+  if(!FILTERS.some(f=>f[0]==evFilter))evFilter='all';
+  $('#filters').innerHTML=FILTERS.map(([k,l,f])=>`<button data-filter="${k}" class="${k==evFilter?'on':''}">${l}<span class="n">${all.filter(f).length}</span></button>`).join('');
+  $('#filters').querySelectorAll('button').forEach(b=>b.onclick=()=>{evFilter=b.dataset.filter;try{localStorage.setItem('evfilter',evFilter)}catch(e){};loadEvals()});
+  const evs=all.filter(FILTERS.find(f=>f[0]==evFilter)[2]);
+  if(!evSel&&evs.length)evSel=(evs.find(e=>e.state=='review')||evs[0]).id;
+  $('#evlist').innerHTML=evs.map(e=>`<button class="evitem st-${e.state} ${e.id==evSel?'on':''}" data-id="${e.id}"><div class="t">${esc(e.instruction)||'<i>no instruction</i>'}</div>
+    <div class="spread"><span class="mut" style="font-size:12px">${new Date(e.time*1000).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><span class="badge">${LBL[e.state]}</span></div></button>`).join('')||`<p class="mut" style="padding:10px">${!all.length?'No evaluations yet.':evFilter=='todo'?'✓ All caught up. Nothing is waiting for a score.':'Nothing here.'}</p>`;
+  $('#evlist').querySelectorAll('.evitem').forEach(b=>b.onclick=()=>{evSel=b.dataset.id;loadEvals()});
+  if(evSel)loadDetail(evSel);
+}
+$('#refresh').onclick=loadEvals;
+let pref='', factors={};
+const FACT=[['speed','Speed'],['smoothness','Smoothness'],['safety','Safety'],['precision','Precision']];
+// A2/B2 better, A1/B1 slightly better; Safety's middle option is No eval instead of Tie
+const fopts=f=>[['A2','Better'],['A1','Slightly better'],f=='safety'?['none','No eval']:['tie','Tie'],['B1','Slightly better'],['B2','Better']];
+async function loadDetail(id){
+  const d=await api('/api/evals/'+id).catch(e=>{toast(e.message)});if(!d)return;
+  const locked=['submitted','discarded','superseded'].includes(d.state)||d.busy, dis=locked?'disabled':'';pref=d.preference;factors={...(d.factors||{})};
+  const names={head_image:'Top',left_image:'Left wrist',right_image:'Right wrist'};
+  const stopNote=s=>!s?'':s.reason=='stopped'?`<div class="banner bad" style="margin:12px 0 0">■ Stopped by the evaluator at step ${s.step}. Recorded up to that step.</div>`
+    :`<div class="banner info" style="margin:12px 0 0">✓ Ended by the evaluator as done at step ${s.step}.</div>`;
+  const side=r=>{const v=c=>`<video data-side="${r.side}" src="/video/${id}/${r.id}/${c}" muted preload="metadata" playsinline ${c==='head_image'?'class="vmain"':''}></video>`;
+    return `<div class="card side ${r.side}"><div class="spread"><span class="chip ${r.side}" style="font-size:13px">Policy ${r.side}</span>
+    <div class="row" style="gap:6px"><button class="small" data-play="${r.side}">▶ Play</button><button class="small" data-pause="${r.side}">❚❚</button><button class="small" data-restart="${r.side}">⟲</button>
+    <select data-rate="${r.side}" style="width:auto;padding:5px 8px"><option>0.5</option><option selected>1</option><option>2</option><option>4</option></select></div></div>
+    ${stopNote(r.stop)}
+    <div style="margin-top:12px">${r.recorded?(r.cams.includes('head_image')?v('head_image'):'')+`<div class="vsmall">${r.cams.filter(c=>c!='head_image').map(c=>`<div>${v(c)}<div class="mut" style="font-size:12px">${names[c]}</div></div>`).join('')}</div>`:'<p class="mut">Not recorded.</p>'}</div>
+    <label>What did ${r.side} do? <span style="text-transform:none;font-weight:400">English or 中文</span></label>
+    <textarea id="ob-${r.side}" placeholder="Your observations: what it got right, where it failed, anything unsafe…" ${dis}>${esc(r.notes)}</textarea>
+    <label>How much of the task did ${r.side} complete?</label>
+    <div class="score"><input type="range" min="0" max="100" step="5" id="rg-${r.side}" value="${r.score??0}" ${dis}><input class="num" type="number" min="0" max="100" id="sc-${r.side}" value="${r.score??''}" placeholder="–" ${dis}></div>
+    <div class="mut" style="font-size:12px;display:flex;justify-content:space-between"><span>0 · nothing</span><span>50 · halfway</span><span>100 · fully done</span></div></div>`};
+  const banner={submitted:'<div class="banner ok">✓ Submitted to the Router. It can no longer be changed here.</div>',discarded:'<div class="banner bad">Discarded. Nothing was published.</div>',
+    superseded:'<div class="banner">A newer evaluation replaced this one on the Router, so it can no longer be submitted.</div>',interrupted:'<div class="banner warn">This evaluation was interrupted before both runs were recorded. Continue it from Record → “Continue an interrupted evaluation”.</div>'}[d.state]||(d.busy?'<div class="banner info">Sending to the Router… this can take a few minutes while videos upload.</div>':'');
+  $('#evdetail').innerHTML=`<div class="card" style="margin-bottom:16px"><div class="spread"><div class="eyebrow">Task</div><span class="badge st-${d.state}">${LBL[d.state]}</span></div>
+    <div style="font:500 24px/1.25 var(--serif);margin-top:4px">${esc(d.instruction)}</div><div class="mut">Scene: ${esc(d.scene)||'–'} · <span style="font-family:ui-monospace,monospace;font-size:12px">${id}</span></div></div>
+    ${banner}<div class="ab">${d.runs.map(side).join('')}</div>
+    <div class="card" style="margin-top:16px"><h2 style="font:500 26px var(--serif)">Compare the policies</h2>
+    <p class="mut" style="font-size:13px;margin:6px 0 4px">Select one option for every factor. Tie means no advantage for either policy. For Safety, select No eval when safety was not evaluated; it will be left out of the feedback.</p>
+    ${FACT.map(([f,name])=>`<div class="factor"><div class="fname">${name}</div><div class="fsides"><span>Policy A</span><span>Policy B</span></div>
+      <div class="scale">${fopts(f).map(([v,l])=>`<button type="button" data-f="${f}" data-v="${v}" class="${v[0]=='A'?'sa':v[0]=='B'?'sb':'mid'} ${factors[f]==v?'on':''}" ${dis}>${l}</button>`).join('')}</div></div>`).join('')}
+    <div class="mut" id="fcount" style="font-size:13px;margin-top:14px"></div></div>
+    <div class="card" style="margin-top:16px"><label style="margin-top:0">Which policy did better?</label>
+    <div class="seg">${[['A','A was better'],['tie','About the same'],['B','B was better']].map(([v,l])=>`<button data-pref="${v}" class="${pref==v?'on':''}" ${dis}>${l}</button>`).join('')}</div>
+    <div class="gen"><label>Overall feedback <span style="text-transform:none;font-weight:400">· English, sent to the Router</span></label>
+      ${locked?'':'<button class="small primary" id="genBtn">✨ Write from my observations</button>'}</div>
+    <textarea id="fb" style="min-height:150px" placeholder="Write your observations for A and B above, then click “Write from my observations”. You can edit the result." ${dis}>${esc(d.feedback)}</textarea>
+    ${locked?'':`<div class="spread" style="margin-top:18px"><button class="ghost" id="discardBtn">Discard…</button>
+      <div class="row"><button id="saveBtn">Save draft</button><button class="primary big" id="submitBtn">Submit to Router</button></div></div>`}
+    ${d.log?`<details class="log"><summary>Router log</summary><pre>${esc(d.log)}</pre></details>`:''}</div>`;
+  const V=s=>document.querySelectorAll(`video[data-side="${s}"]`);
+  document.querySelectorAll('[data-play]').forEach(b=>b.onclick=()=>V(b.dataset.play).forEach(v=>v.play()));
+  document.querySelectorAll('[data-pause]').forEach(b=>b.onclick=()=>V(b.dataset.pause).forEach(v=>v.pause()));
+  document.querySelectorAll('[data-restart]').forEach(b=>b.onclick=()=>V(b.dataset.restart).forEach(v=>{v.currentTime=0;v.play()}));
+  document.querySelectorAll('[data-rate]').forEach(s=>s.onchange=()=>V(s.dataset.rate).forEach(v=>v.playbackRate=+s.value));
+  for(const r of d.runs){const rg=$('#rg-'+r.side),sc=$('#sc-'+r.side);if(!rg)continue;rg.oninput=()=>sc.value=rg.value;sc.oninput=()=>rg.value=sc.value}
+  const fcount=()=>$('#fcount').textContent=`${FACT.filter(([f])=>factors[f]).length} of ${FACT.length} factors selected.`;fcount();
+  document.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{factors[b.dataset.f]=b.dataset.v;
+    document.querySelectorAll(`[data-f="${b.dataset.f}"]`).forEach(x=>x.classList.toggle('on',x==b));fcount()});
+  document.querySelectorAll('[data-pref]').forEach(b=>b.onclick=()=>{pref=b.dataset.pref;document.querySelectorAll('[data-pref]').forEach(x=>x.classList.toggle('on',x==b))});
+  const body=action=>{const o={action,preference:pref,feedback:$('#fb').value,notes:{},factors:{...factors}};
+    d.runs.forEach(r=>{o['score_'+r.side]=$('#sc-'+r.side)?.value??'';o.notes[r.side]=$('#ob-'+r.side)?.value??''});return o};
+  if(locked)return;
+  $('#genBtn').onclick=async()=>{
+    const b=body('save');if(!Object.values(b.notes).some(x=>x.trim()))return toast('Write a few observations for each policy first.');
+    if(FACT.some(([f])=>!factors[f]))return toast('Select one option for every factor under “Compare the policies”.');
+    if($('#fb').value.trim()&&!confirm('Replace the current feedback text?'))return;
+    const btn=$('#genBtn'),fb=$('#fb');btn.disabled=true;btn.textContent='Writing…';fb.classList.add('shimmer');
+    try{const r=await api(`/api/evals/${id}/generate`,b);fb.value=r.feedback;await api('/api/evals/'+id,body('save'));toast('Feedback written. Read it and edit if needed.')}
+    catch(e){toast(e.message)}finally{btn.disabled=false;btn.textContent='✨ Write from my observations';fb.classList.remove('shimmer')}};
+  $('#saveBtn').onclick=()=>api('/api/evals/'+id,body('save')).then(r=>{toast(r.msg);loadEvals()}).catch(e=>toast(e.message));
+  $('#submitBtn').onclick=()=>{if(d.runs.some(r=>$('#sc-'+r.side).value==='')||!pref)return toast('Give both runs a score and choose which was better.');
+    if(!$('#fb').value.trim()&&!confirm('Submit without any feedback text?'))return;
+    if(!confirm('Submit to the Router? Scores, feedback, videos and the dataset become public and cannot be edited.'))return;
+    api('/api/evals/'+id,body('submit')).then(r=>{toast('Submitting… videos are uploading.');loadEvals();pollBusy(id)}).catch(e=>toast(e.message))};
+  $('#discardBtn').onclick=()=>{const reason=prompt('Why discard this evaluation? (required, nothing is published)');if(!reason)return;
+    api('/api/evals/'+id,{action:'discard',reason}).then(r=>{toast('Discarding…');pollBusy(id)}).catch(e=>toast(e.message))};
+}
+function pollBusy(id){const t=setInterval(async()=>{const d=await api('/api/evals/'+id).catch(()=>null);if(!d||!d.busy){clearInterval(t);if(view=='review'&&evSel==id)loadEvals();if(d)toast(d.state=='submitted'?'✓ Submitted':d.state=='discarded'?'Discarded':'Router step finished, see the log')}},3000)}
+
+// ---- live link ----
+let lastBlob=null;
+function connect(){
+  const ws=new WebSocket(`ws://${location.host}/ws`);ws.binaryType='blob';
+  ws.onmessage=m=>{
+    if(typeof m.data!=='string'){const u=URL.createObjectURL(m.data);const img=ST&&ST.recording?$('#lv'):$('#pv');img.src=u;
+      if(lastBlob)setTimeout((b=>()=>URL.revokeObjectURL(b))(lastBlob),1000);lastBlob=u;
+      if(img.id=='pv')$('#pvEmpty').style.display='none';return}
+    const prev=ST;ST=JSON.parse(m.data);renderChecks();renderRun();renderPrompt();mood();
+    if(!ST.preview&&!ST.recording)$('#pvEmpty').style.display='';
+    if(prev&&prev.recording&&!ST.recording&&view=='record')loadResumable();
+  };
+  ws.onclose=()=>{toast('Lost connection to the station, reconnecting…');setTimeout(connect,1500)};
+}
+show(['setup','record','review'].includes(location.hash.slice(1))?location.hash.slice(1):'setup');
+api('/api/config').then(c=>{CFG=c;$('#sub').textContent=`${c.robot.toUpperCase()} · ${c.institution}`;
+  let saved={};try{saved=JSON.parse(localStorage.getItem('evform')||'{}')}catch(e){}
+  $('#scene').value=saved.scene||c.scene||'';$('#evaluator').value=saved.evaluator||c.evaluator||'';$('#maxsteps').value=c.max_steps;connect()});
+</script>
+</body>
+</html>

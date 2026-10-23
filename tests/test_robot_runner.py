@@ -59,7 +59,7 @@ def test_extra_state_and_done_plans():
     np.testing.assert_array_equal(tensor_to_numpy(message.state["navigation_state"]), [1.23456789012, 2.0])
     assert tensor_to_numpy(message.state["joint_position"]).size == 0
     assert {sensor.sensor_id for sensor in message.sensors} == {"front_image", "goal_image"}
-    with pytest.raises(ValueError, match="override"):
+    with pytest.raises(ValueError, match="duplicate observation state joint_position"):
         protobuf_observation(RobotObservation({}, np.zeros(0), np.zeros(0), np.zeros(0), {"joint_position": np.ones(1)}),
                              instruction="go", control_step=0)
 
