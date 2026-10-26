@@ -158,3 +158,10 @@ Register the policy with `action_spaces: [base_velocity]`, `control_hz: 10` and
 a horizon of at least a few steps so the watchdog does not stop the rover
 between chunks. The policy server's `examples/rover_policy.py` is a working
 minimal policy.
+
+A policy written for the Earth Rovers SDK (HTTP on `localhost:8000`) runs
+unchanged behind the policy server's `colosseum-rover-sdk-bridge`, which serves
+the SDK endpoints from the trial and turns `/checkpoint-reached` into `done`.
+Its `/control` values are SDK commands, so the operator config for such a
+policy keeps `max_linear: 1.0` and `max_angular: 1.0` (the policy applies its
+own speed caps); with lower limits the same values must be passed to the bridge.

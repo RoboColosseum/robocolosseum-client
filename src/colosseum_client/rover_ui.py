@@ -228,7 +228,8 @@ class Operator:
             raise RuntimeError('Stop the session before connecting another rover')
         from .robots.earth_rover_mini_plus import resolve_secret
         settings = {**self.config.adapter_config, 'bot_slug': bot}
-        settings['sdk_token'] = resolve_secret(settings.get('sdk_token'))
+        if settings.get('link', 'frodobots') == 'frodobots':  # the simulator never talks to FrodoBots
+            settings['sdk_token'] = resolve_secret(settings.get('sdk_token'))
         settings.pop('mission_slug', None)
         self.bot = bot
         self.link_phase = 'connecting'

@@ -57,9 +57,11 @@ def test_configuration_is_validated(tmp_path, monkeypatch):
         rover.EarthRoverMiniPlusRobot(rover_config(tmp_path, port='x'))
     with pytest.raises(ValueError, match='command_ttl_s'):
         rover.EarthRoverMiniPlusRobot(rover_config(tmp_path, command_ttl_s=9))
+    monkeypatch.delenv('FRODOBOTS_SDK_TOKEN', raising=False)
     with pytest.raises(ValueError, match='FRODOBOTS_SDK_TOKEN'):
-        monkeypatch.delenv('FRODOBOTS_SDK_TOKEN', raising=False)
-        rover.EarthRoverMiniPlusRobot(rover_config(tmp_path, sdk_token='env:FRODOBOTS_SDK_TOKEN'))
+        rover.EarthRoverMiniPlusRobot(rover_config(tmp_path, link='frodobots', sdk_token='env:FRODOBOTS_SDK_TOKEN'))
+    # The simulator never talks to FrodoBots, so it does not need the token.
+    rover.EarthRoverMiniPlusRobot(rover_config(tmp_path, sdk_token='env:FRODOBOTS_SDK_TOKEN')).close()
     monkeypatch.setenv('FRODOBOTS_SDK_TOKEN', 'secret')
     assert rover.resolve_secret('env:FRODOBOTS_SDK_TOKEN') == 'secret' and rover.resolve_secret('plain') == 'plain'
 
@@ -578,3 +580,14 @@ def test_staleness_limits_are_configurable(tmp_path, monkeypatch):
         strict.close()
     with pytest.raises(ValueError, match='front_max_age_s'):
         rover.EarthRoverMiniPlusRobot(rover_config(tmp_path, front_max_age_s=0))
+
+
+def test_simulated_rover_turns_left_on_positive_angular():
+    link = SimulatedRoverLink()
+    link.start()
+    link._updated -= 1.0
+    link.send(0.0, 0.5)  # one second at +0.5: 45 degrees counter-clockwise
+    assert link.state['heading_deg'] == pytest.approx(315.0, abs=1.0)
+    link._updated -= 1.0
+    link.send(1.0, 0.0)  # heading north-west: latitude and longitude both move, longitude decreases
+    assert link.state['latitude'] > 37.0 and link.state['longitude'] < -122.0

@@ -154,7 +154,8 @@ class EarthRoverMiniPlusRobot(Robot):
         self._clipped = 0
         self.closed = False
         self.sender = None
-        settings['sdk_token'] = resolve_secret(settings.get('sdk_token'))
+        if settings.get('link', 'frodobots') == 'frodobots':  # the simulator never talks to FrodoBots
+            settings['sdk_token'] = resolve_secret(settings.get('sdk_token'))
         self.mission_slug = settings.get('mission_slug') or ''
         self.link = make_link(settings, cameras=self.cameras, size=self.size)
         self.started = False

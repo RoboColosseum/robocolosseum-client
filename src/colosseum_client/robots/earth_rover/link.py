@@ -80,7 +80,8 @@ class SimulatedRoverLink:
         now = time.monotonic()
         elapsed = max(0.0, now - self._updated)
         self._updated = now
-        heading = (self.state['heading_deg'] + angular * elapsed * 90.0) % 360.0
+        # Compass heading (clockwise from north); +angular turns left, like the rover.
+        heading = (self.state['heading_deg'] - angular * elapsed * 90.0) % 360.0
         radians = math.radians(heading)
         self.state['latitude'] += linear * elapsed * 1e-5 * math.cos(radians)
         self.state['longitude'] += linear * elapsed * 1e-5 * math.sin(radians)
