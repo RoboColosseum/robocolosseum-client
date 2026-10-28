@@ -1,6 +1,8 @@
-# Colosseum Client
+# RoboColosseum Client
 
-Run robot evaluations with [RoboColosseum](https://frodobots-org.github.io/robo-colosseum/) and upload the recorded results.
+Run robot evaluations for the [RoboColosseum](https://robocolosseum.ai/)
+Open Track. The Client controls the robot, communicates with the Policy Server,
+and records and uploads evaluation results.
 
 ## 1. Install
 
