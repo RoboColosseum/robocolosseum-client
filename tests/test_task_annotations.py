@@ -128,6 +128,8 @@ def test_record_only_defers_difficulty_until_review(manifest, monkeypatch):
         run['state'] = 'finished'
     monkeypatch.setattr(ev, 'EvalAPI', API)
     monkeypatch.setattr(ev, 'run_trial', trial)
+    # Other UI tests replace ask globally; keep this recorder test independent of their order.
+    monkeypatch.setattr(ev, 'ask', lambda prompt, options=None: ev.input(prompt))
     for name, default in [('progress', None), ('prompt_task_difficulty', None),
                           ('input', builtins.input), ('print', builtins.print)]:
         monkeypatch.setattr(ev, name, getattr(ev, name, default), raising=False)
