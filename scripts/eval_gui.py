@@ -711,6 +711,8 @@ def eval_detail(eid):
     draft = d.get('draft', {})
     log = rv.ROOT / eid / 'review-router.log'
     return {**eval_summary(rv.ROOT / eid / 'manifest.json'),
+            'task_difficulty': d.get('task_difficulty'),
+            'task_difficulty_locked': bool(rv.exported_difficulties(rv.ROOT / eid, d)),
             'runs': [{'id': r['id'], 'side': r['side'], 'recorded': r['recorded'],
                       'cams': [c for c in CAMS if (r['path'] / c).is_dir()],
                       'stop': operator_stop(r['path']), 'notes': notes.get(r['side'], ''),
@@ -872,8 +874,10 @@ def act_eval(eid: str, body: dict):
             notes['factors'] = {k: v for k, v in body['factors'].items() if k in FACTORS and v in FACTOR_TEXT}
         notes_path(eid).write_text(json.dumps(notes, ensure_ascii=False))
     form = {k: [str(v)] for k, v in body.items() if k.startswith('score_') or k in ('preference', 'feedback')}
+    if 'task_difficulty' in body:
+        form['task_difficulty'] = [body['task_difficulty']]
     try:
-        rv.save(eid, form)
+        rv.save(eid, form, require_difficulty=action == 'submit')
     except ValueError as e:
         raise HTTPException(400, f'Not saved: {e}')
     if action == 'submit':

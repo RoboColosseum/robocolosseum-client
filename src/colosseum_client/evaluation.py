@@ -26,6 +26,7 @@ from .adapters import make_robot
 from .diagnostics import read_observation, execute_robot_action_async, close_resources
 from .client import ColosseumClient, ProtocolError
 from .recording import TrialRecorder
+from .task_annotations import difficulty, exported_difficulties, set_difficulty
 from .http_diagnostics import log_http_error
 from .navigation import ROVER_TYPE
 from .robot_runner import action_chunk, protobuf_observation
@@ -575,6 +576,14 @@ def select_task(api, robot, test=False):
         print(f'Enter a number from 1 to {len(tasks)}.')
 
 
+def prompt_task_difficulty():
+    while True:
+        try:
+            return difficulty(ask('Task difficulty (1-10; 1 easiest, 10 hardest): ').strip(), required=True)
+        except ValueError as exc:
+            print(str(exc))
+
+
 def run_evaluation(config, *, track=None, resume=None, abort=None, execute_action=True):
     track = track or config.track or None
     if config.robot_type == ROVER_TYPE and not (resume or abort):
@@ -697,6 +706,11 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                     save(manifest, local)
                 if config.recording:
                     from .lerobot_export import export_trial
+                    value = local.get('task_difficulty')
+                    if value is None and not exported_difficulties(folder, local):
+                        value = prompt_task_difficulty()
+                    set_difficulty(folder, local, value)
+                    save(manifest, local)
                     context_path = run_path / 'recording-context.json'
                     if not context_path.exists():
                         raise ValueError('This older recording lacks the context required for LeRobot export')
@@ -713,6 +727,8 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                             'scene': assignment.get('scene', config.scene),
                             'evaluator': assignment.get('evaluator', config.evaluator),
                             'outcome': local['outcomes'][run['side']],
+                            **({'task_difficulty': local['task_difficulty'], 'task_difficulty_scale': 10}
+                               if local.get('task_difficulty') is not None else {}),
                             **({'goal': task['goal']} if task.get('goal') else {})})
                     print(f'LeRobot dataset saved: {dataset}', flush=True)
             if 'result' not in local:

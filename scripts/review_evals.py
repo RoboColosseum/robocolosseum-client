@@ -18,6 +18,7 @@ from pathlib import Path
 
 import yaml
 from urllib.parse import parse_qs, unquote, urlparse
+from colosseum_client.task_annotations import exported_difficulties, set_difficulty
 
 CAMS = ('head_image', 'left_image', 'right_image')
 HERE = Path(__file__).parent
@@ -139,6 +140,11 @@ def eval_page(ev, msg=''):
     elif busy(ev):
         parts.append("<div class='card warn'>Talking to the Router… <a href=''>refresh</a></div>")
     parts.append("<form method=post>")
+    difficulty_dis = ' disabled' if locked or exported_difficulties(ROOT / ev, d) else ''
+    parts.append(f"<div class=card><label>Task difficulty (1–10)</label>"
+                 f"<input type=number min=1 max=10 step=1 name=task_difficulty "
+                 f"value='{html.escape(str(d.get('task_difficulty', '')))}'{difficulty_dis}>"
+                 "<p class=mut>1 is easiest; 10 is hardest. Enter once for this task; shared by A and B.</p></div>")
     for r in runs(d):
         side = r['side']
         o = outcomes.get(side, {})
@@ -182,11 +188,13 @@ function rate(s,r){V(s).forEach(v=>v.playbackRate=+r)}
     return page(ev, ''.join(parts))
 
 
-def save(ev, form):
+def save(ev, form, *, require_difficulty=False):
     path = ROOT / ev / 'manifest.json'
     d = json.loads(path.read_text())
     if d.get('submitted') or d.get('review') == 'superseded':
         return '<span class=warn>This eval is closed; nothing changed.</span>'
+    set_difficulty(path.parent, d, form.get('task_difficulty', [d.get('task_difficulty')])[0],
+                   required=require_difficulty)
     outcomes = dict(d.get('outcomes', {}))
     for r in runs(d):
         raw = form.get(f"score_{r['side']}", [''])[0].strip()
@@ -218,6 +226,9 @@ def busy(ev):
 
 def router(ev, action, reason=''):
     """Run the real client for this one eval; mark the manifest when it succeeds."""
+    if action == 'submit':
+        document = load(ev)
+        set_difficulty(ROOT / ev, document, document.get('task_difficulty'), required=True)
     if load(ev).get('review') == 'superseded':
         return '<span class=warn>This eval was replaced by a newer one.</span>'
     if any(busy(e) for e in JOBS):
@@ -313,7 +324,7 @@ class H(BaseHTTPRequestHandler):
                 reason = form.get('reason', [''])[0].strip()
                 msg = router(p[1], 'discard', reason) if reason else '<span class=warn>A reason is required.</span>'
             else:
-                msg = save(p[1], form)
+                msg = save(p[1], form, require_difficulty=action == 'submit')
                 if action == 'submit':
                     msg = (router(p[1], 'submit') if 'result' in load(p[1])
                            else '<span class=warn>Not submitted: every score and a preference are required.</span>')
