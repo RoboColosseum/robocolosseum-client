@@ -2,6 +2,7 @@ import builtins
 import importlib
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -11,26 +12,33 @@ from colosseum_client.task_annotations import difficulty, set_difficulty
 
 
 @pytest.fixture
-def review(tmp_path, monkeypatch):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'scripts'))
-    module = importlib.import_module('review_evals')
-    monkeypatch.setattr(module, 'ROOT', tmp_path, raising=False)
-    monkeypatch.setattr(module, 'JOBS', {})
+def manifest(tmp_path):
     folder = tmp_path / 'ev_test'
     folder.mkdir()
     document = {'assignment': {'id': folder.name, 'task': {'instruction': 'pick'},
                               'runs': [{'id': 'run_A', 'side': 'A'}, {'id': 'run_B', 'side': 'B'}]},
                 'outcomes': {}, 'review': 'pending'}
     (folder / 'manifest.json').write_text(json.dumps(document))
-    return module, folder
+    return folder
+
+
+@pytest.fixture
+def review(manifest, monkeypatch):
+    if sys.version_info < (3, 12):
+        pytest.skip('Existing review_evals.py uses Python 3.12 f-string syntax')
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'scripts'))
+    module = importlib.import_module('review_evals')
+    monkeypatch.setattr(module, 'ROOT', manifest.parent, raising=False)
+    monkeypatch.setattr(module, 'JOBS', {})
+    return module, manifest
 
 
 @pytest.mark.parametrize('value', [True, False, 0, 11, -1, 1.5, '1.5', '1/10', 'NaN', '３', [], {}])
-def test_invalid_difficulty_does_not_modify_manifest(review, value):
-    module, folder = review
+def test_invalid_difficulty_does_not_modify_manifest(manifest, value):
+    folder = manifest
     original = (folder / 'manifest.json').read_bytes()
     with pytest.raises(ValueError, match='integer'):
-        module.save(folder.name, {'task_difficulty': [value]})
+        set_difficulty(folder, json.loads(original), value)
     assert (folder / 'manifest.json').read_bytes() == original
 
 
@@ -53,12 +61,12 @@ def test_draft_and_submission_require_one_shared_rating(review, monkeypatch):
 
 
 @pytest.mark.parametrize('existing', [None, 3])
-def test_exported_rating_is_frozen_including_legacy_missing_value(review, existing):
-    module, folder = review
+def test_exported_rating_is_frozen_including_legacy_missing_value(manifest, existing):
+    folder = manifest
     marker = folder / 'run_A/lerobot/meta/colosseum.json'
     marker.parent.mkdir(parents=True)
     marker.write_text(json.dumps({} if existing is None else {'task_difficulty': existing}))
-    document = module.load(folder.name)
+    document = json.loads((folder / 'manifest.json').read_text())
     set_difficulty(folder, document, existing, required=True)
     assert document.get('task_difficulty') == existing
     with pytest.raises(ValueError, match='cannot change'):
@@ -78,6 +86,8 @@ def test_cli_reprompts_until_integer_rating(monkeypatch):
 
 def test_gui_api_saves_and_restores_rating_and_rejects_boolean(review, monkeypatch):
     module, folder = review
+    pytest.importorskip('fastapi', reason='The GUI is an optional extra')
+    pytest.importorskip('uvicorn', reason='The GUI is an optional extra')
     gui = importlib.import_module('eval_gui')
     monkeypatch.setattr(gui, 'rv', module)
     body = {'score_A': '25', 'score_B': '75', 'preference': 'B', 'feedback': 'observed',
@@ -93,11 +103,12 @@ def test_gui_api_saves_and_restores_rating_and_rejects_boolean(review, monkeypat
     assert len(sent) == 1 and sent[0]['task_difficulty'] == 3
 
 
-def test_record_only_defers_difficulty_until_review(review, monkeypatch):
-    module, folder = review
+def test_record_only_defers_difficulty_until_review(manifest, monkeypatch):
+    folder = manifest
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'scripts'))
     recording = importlib.import_module('record_evals')
     from colosseum_client import lerobot_export
-    assignment = module.load(folder.name)['assignment']
+    assignment = json.loads((folder / 'manifest.json').read_text())['assignment']
     assignment.update(state='pending', track='open')
     assignment['task']['cameras'] = []
     for run in assignment['runs']:
@@ -126,17 +137,17 @@ def test_record_only_defers_difficulty_until_review(review, monkeypatch):
                                instruction='pick', scene='desk', evaluation_dir=str(folder.parent))
     assert recording.record(config, resume=folder.name, ask=lambda p: prompts.append(p) or '') == folder.name
     assert len(prompts) == 2 and all('restore the scene' in p for p in prompts)
-    assert module.load(folder.name).get('task_difficulty') is None
+    assert json.loads((folder / 'manifest.json').read_text()).get('task_difficulty') is None
     assert not list(folder.glob('*/lerobot'))
 
 
 @pytest.mark.parametrize('rating', [None, 7])
-def test_resume_existing_exports_preserves_metadata_without_reprompt(review, monkeypatch, rating):
-    module, folder = review
+def test_resume_existing_exports_preserves_metadata_without_reprompt(manifest, monkeypatch, rating):
+    folder = manifest
     import numpy as np
     from colosseum_client.droid_robot import RobotObservation
     from colosseum_client.lerobot_export import export_trial
-    document = module.load(folder.name)
+    document = json.loads((folder / 'manifest.json').read_text())
     assignment = document['assignment']
     assignment.update(state='pending', track='open')
     assignment['task']['cameras'] = ['head_image']
@@ -193,4 +204,4 @@ def test_resume_existing_exports_preserves_metadata_without_reprompt(review, mon
     ev.run_evaluation(config, resume=folder.name)
     assert submitted == [document['result']]
     assert all(marker.read_bytes() == raw for marker, raw in before.items())
-    assert module.load(folder.name).get('task_difficulty') == rating
+    assert json.loads((folder / 'manifest.json').read_text()).get('task_difficulty') == rating
