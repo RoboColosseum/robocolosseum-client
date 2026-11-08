@@ -174,6 +174,9 @@ def port_open(url):
             fields = row.split()
             if fields[3] == '0A' and int(fields[1].rsplit(':', 1)[1], 16) == port:
                 return True
+    if sys.platform == 'darwin':  # LOCAL PATCH (macOS has no /proc): ask lsof, which does not connect either
+        out = subprocess.run(['lsof', '-nP', f'-iTCP:{port}', '-sTCP:LISTEN'], capture_output=True, text=True)
+        return out.returncode == 0 and 'LISTEN' in out.stdout
     return False
 
 
@@ -219,6 +222,8 @@ def gpu_apps():
 
 def check_gpu():
     S.set_check('gpu', 'running', 'Looking at the GPU…')
+    if not shutil.which('nvidia-smi'):  # LOCAL PATCH: Mac rig, models run remotely (Hopper via Tailscale)
+        return S.set_check('gpu', 'ok', 'No local GPU: models run remotely')
     try:
         apps = gpu_apps()
     except Exception as e:
