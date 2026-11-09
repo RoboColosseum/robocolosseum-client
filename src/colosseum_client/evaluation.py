@@ -220,10 +220,10 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
             options = {'before_start': confirm_live} if local_mode and not config.test else {}
             metadata = await client.connect(evaluation_run=run['id'], institution=config.institution, **options)
             native_mode = getattr(client, 'native_control_mode', 'joint_pos')
-            trial_hz = (client.model['control_hz'] if local_mode and client.model.get('model_type') == 'llm'
-                        else config.control_hz)
+            # Local runs follow the assigned model's rate, so one session can run 15 and 30 Hz models.
+            trial_hz = client.model.get('control_hz', config.control_hz) if local_mode else config.control_hz
             if type(trial_hz) is not int or trial_hz <= 0:
-                raise ProtocolError('Assigned LLM control_hz must be a positive integer')
+                raise ProtocolError('Assigned control_hz must be a positive integer')
             if local_mode:
                 mode = native_mode
                 if mode == 'eef_delta_pose' and not execute_action:

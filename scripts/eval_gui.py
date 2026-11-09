@@ -1262,13 +1262,15 @@ def main():
     p.add_argument('--config', default=str(CLIENT / 'configs/robot.so101.yaml'))
     p.add_argument('--server-dir', type=Path, default=CLIENT.parent / 'colosseum-policy-server')
     p.add_argument('--server-config', default='configs/local-runtime-so101.yaml',
-                   help='Policy Server config, relative to --server-dir')
+                   help='Policy Server config, relative to --server-dir or to this client folder')
     p.add_argument('--llm-keys', type=Path, default=CLIENT / 'local/llm-keys.env')
     p.add_argument('--claude-env', type=Path, default=CLIENT / 'local/claude-account.env',
                    help='env for the Claude Code login, used for Claude when no Anthropic key is saved')
     p.add_argument('--port', type=int, default=8770)
     p.add_argument('--offline', action='store_true', help='start in offline mode (no Router, nothing uploaded)')
     ARGS = p.parse_args()
+    if not (ARGS.server_dir / ARGS.server_config).exists() and (CLIENT / ARGS.server_config).exists():
+        ARGS.server_config = str((CLIENT / ARGS.server_config).resolve())
     OFFLINE[0] = ARGS.offline
     CONFIG = RobotClientConfig.from_yaml(ARGS.config)
     CLAUDE_ENV = source_env(ARGS.claude_env)

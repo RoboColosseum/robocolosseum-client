@@ -85,10 +85,9 @@ class LocalPolicyClient(ColosseumClient):
         self.model = self.router_model
         self.task = preparation['task']
         dimensions = {a.name: a.action_dim for a in self.robot_spec.action_spaces}
-        llm_assigned = self.model.get('model_type') == 'llm'
+        # control_hz is not checked: the trial runs at the assigned model's rate.
         if (not verification_only and not self.test_robot and not self.use_local_action_contract
-                and (dimensions.get(self.model['action_space']) != self.model['action_dim']
-                     or (not llm_assigned and self.model['control_hz'] != self.robot_spec.control_hz))):
+                and dimensions.get(self.model['action_space']) != self.model['action_dim']):
             raise ProtocolError('Assigned model does not support this robot action contract')
         simulate = False
         # Router credentials never travel to the local service.
@@ -166,7 +165,7 @@ class LocalPolicyClient(ColosseumClient):
                         raise ProtocolError('Local effective model identity mismatch')
                     if (dimensions.get(effective.get('action_space')) != effective.get('action_dim')
                             or (effective.get('model_type') != 'llm'
-                                and effective.get('control_hz') != self.robot_spec.control_hz)):
+                                and effective.get('control_hz') != self.router_model.get('control_hz'))):
                         raise ProtocolError('Local effective model does not support this robot action contract')
                     self.model = effective
                 break

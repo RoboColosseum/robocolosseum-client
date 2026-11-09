@@ -37,8 +37,8 @@ def policies(server_config, config):
     for m in raw.get('models') or []:
         if m.get('model_type', 'vla') != 'vla':
             continue
-        if (m.get('action_space') != 'joint_position' or int(m.get('action_dim', 0)) != ACTION_DIMS.get(config.robot_type)
-                or int(m.get('control_hz', 0)) != config.control_hz):
+        # Any control_hz: each run is paced at its own model's rate.
+        if m.get('action_space') != 'joint_position' or int(m.get('action_dim', 0)) != ACTION_DIMS.get(config.robot_type):
             continue
         out.append((m['name'], {k: m[k] for k in ('url', 'revision', 'action_space', 'action_dim',
                                                    'control_hz', 'max_horizon')} | {'subfolder': ''}))
