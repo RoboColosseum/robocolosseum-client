@@ -545,7 +545,10 @@ async function loadDetail(id){
     superseded:'<div class="banner">A newer evaluation replaced this one on the Router, so it can no longer be submitted.</div>',interrupted:'<div class="banner warn">This evaluation was interrupted before both runs were recorded. Continue it from Record → “Continue an interrupted evaluation”.</div>'}[d.state]||(d.busy?'<div class="banner info">Sending to the Router… this can take a few minutes while videos upload.</div>':'');
   $('#evdetail').innerHTML=`<div class="card" style="margin-bottom:16px"><div class="spread"><div class="eyebrow">Task</div><span class="badge st-${d.state}">${LBL[d.state]}</span></div>
     <div style="font:500 24px/1.25 var(--serif);margin-top:4px">${esc(d.instruction)}</div><div class="mut">Scene: ${esc(d.scene)||'–'} · <span style="font-family:ui-monospace,monospace;font-size:12px">${id}</span></div></div>
-    ${banner}<div class="ab">${d.runs.map(side).join('')}</div>
+    ${banner}<div class="card"><label for="taskDifficulty">Task difficulty (1–10)</label>
+    <input id="taskDifficulty" type="number" min="1" max="10" step="1" inputmode="numeric" style="max-width:160px" value="${esc(d.task_difficulty??'')}" ${locked||d.task_difficulty_locked?'disabled':''}>
+    <p class="mut">1 is easiest; 10 is hardest. Enter once for this task; shared by A and B.</p></div>
+    <div class="ab">${d.runs.map(side).join('')}</div>
     <div class="card" style="margin-top:16px"><h2 style="font:500 26px var(--serif)">Compare the policies</h2>
     <p class="mut" style="font-size:13px;margin:6px 0 4px">Select one option for every factor. Tie means no advantage for either policy. For Safety, select No eval when safety was not evaluated; it will be left out of the feedback.</p>
     ${FACT.map(([f,name])=>`<div class="factor"><div class="fname">${name}</div><div class="fsides"><span>Policy A</span><span>Policy B</span></div>
@@ -573,7 +576,7 @@ async function loadDetail(id){
   document.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{factors[b.dataset.f]=b.dataset.v;
     document.querySelectorAll(`[data-f="${b.dataset.f}"]`).forEach(x=>x.classList.toggle('on',x==b));fcount()});
   document.querySelectorAll('[data-pref]').forEach(b=>b.onclick=()=>{pref=b.dataset.pref;document.querySelectorAll('[data-pref]').forEach(x=>x.classList.toggle('on',x==b))});
-  const body=action=>{const o={action,preference:pref,feedback:$('#fb').value,notes:{},factors:{...factors}};
+  const body=action=>{const o={action,preference:pref,feedback:$('#fb').value,notes:{},factors:{...factors},task_difficulty:$('#taskDifficulty').value};
     d.runs.forEach(r=>{o['score_'+r.side]=$('#sc-'+r.side)?.value??'';o.notes[r.side]=$('#ob-'+r.side)?.value??''});return o};
   if(locked)return;
   $('#genBtn').onclick=async()=>{
@@ -585,6 +588,8 @@ async function loadDetail(id){
     catch(e){toast(e.message)}finally{btn.disabled=false;btn.textContent='✨ Write from my observations';fb.classList.remove('shimmer')}};
   $('#saveBtn').onclick=()=>api('/api/evals/'+id,body('save')).then(r=>{toast(r.msg);loadEvals()}).catch(e=>toast(e.message));
   $('#submitBtn').onclick=()=>{if(d.runs.some(r=>$('#sc-'+r.side).value==='')||!pref)return toast('Give both runs a score and choose which was better.');
+    const difficulty=$('#taskDifficulty');
+    if(!difficulty.disabled&&(!difficulty.value||!difficulty.checkValidity())){difficulty.focus();return toast('Task difficulty must be an integer from 1 to 10')}
     if(!$('#fb').value.trim()&&!confirm('Submit without any feedback text?'))return;
     if(d.offline){if(!confirm('Keep this result? It stays on this computer, is not uploaded, and can no longer be edited.'))return;
       return api('/api/evals/'+id,body('submit')).then(r=>{toast(r.msg);loadEvals()}).catch(e=>toast(e.message))}

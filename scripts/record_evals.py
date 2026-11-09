@@ -93,6 +93,7 @@ def record(config, *, resume=None, execute_action=True, ask=builtins.input):
 
     # Defer every scoring step: no outcome prompt, no dataset export (it embeds the outcome), stop at Preference.
     ev.progress = lambda label: None
+    ev.prompt_task_difficulty = lambda: None  # Fill once on the review page, alongside the scores.
     lx.export_trial = lambda path, *x, **k: path / 'lerobot'
 
     def guarded_input(prompt=''):

@@ -84,7 +84,13 @@ def test_publish_before_upload_and_resume_failed_submission(tmp_path, monkeypatc
     answers=iter(['','75','','100','B','saved before upload'] if track == 'open' else ['1','','y','75'])
     if recording and skip_upload and track == 'open':
         answers = iter(['','75','','100','B','saved before upload','n'])
-    monkeypatch.setattr('builtins.input',lambda _:next(answers))
+    difficulty_prompts = []
+    def answer(prompt):
+        if prompt.startswith('Task difficulty'):
+            difficulty_prompts.append(prompt)
+            return '7'
+        return next(answers)
+    monkeypatch.setattr('builtins.input', answer)
     if recording:
         e.run_evaluation(config,track=track)
     else:
@@ -93,6 +99,9 @@ def test_publish_before_upload_and_resume_failed_submission(tmp_path, monkeypatc
     saved=json.loads((tmp_path/'ev_test/manifest.json').read_text())
     assert saved['outcomes']==expected_outcomes
     assert saved['result']==expected_result
+    assert len(difficulty_prompts) == (1 if recording else 0)
+    if recording:
+        assert saved['task_difficulty'] == 7 and saved['task_difficulty_scale'] == 10
     answers=iter(['n'] if track == 'open' else [])
     monkeypatch.setattr('builtins.input',lambda _:next(answers))
     if not recording:
@@ -110,6 +119,9 @@ def test_publish_before_upload_and_resume_failed_submission(tmp_path, monkeypatc
         metadata = json.loads((output / "meta/colosseum.json").read_text())
         assert metadata["outcome"] == expected_outcomes[assignment['runs'][0]['side']]
         assert metadata["test"] is True
+        for run in assignment['runs']:
+            metadata = json.loads((tmp_path / 'ev_test' / run['id'] / 'lerobot/meta/colosseum.json').read_text())
+            assert metadata['task_difficulty'] == 7 and metadata['task_difficulty_scale'] == 10
 
 
 def test_interrupted_second_trial_keeps_first_score_without_uploading(tmp_path, monkeypatch):
@@ -147,7 +159,7 @@ def test_interrupted_second_trial_keeps_first_score_without_uploading(tmp_path, 
         trial['state'] = 'finished'
     monkeypatch.setattr(e, 'EvalAPI', API)
     monkeypatch.setattr(e, 'run_trial', run)
-    answers = iter(['','75',''])
+    answers = iter(['','75','7',''])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     config = RobotClientConfig(url='ws://localhost', token='test', cameras={'head_image':'dummy'},
                                instruction='cup', scene='desk', evaluation_dir=str(tmp_path))
