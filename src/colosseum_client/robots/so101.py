@@ -43,8 +43,11 @@ def _camera_type(camera_id, configured):
     return 'realsense' if camera_id.isdecimal() and len(camera_id) > 4 else 'opencv'
 
 
-def _open_follower(port, robot_id, calibration_dir, cameras, max_relative_target):
-    """cameras: role -> (type, id, width, height, fps). Returns a connected follower."""
+def _open_follower(port, robot_id, calibration_dir, cameras, max_relative_target, depth_role=None):
+    """cameras: role -> (type, id, width, height, fps). Returns a connected follower.
+
+    ``depth_role`` enables the depth stream on that RealSense camera only.
+    """
     try:
         from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
         from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
@@ -55,7 +58,8 @@ def _open_follower(port, robot_id, calibration_dir, cameras, max_relative_target
     for role, (kind, camera_id, width, height, fps) in cameras.items():
         if kind == 'realsense':
             camera_configs[role] = RealSenseCameraConfig(
-                serial_number_or_name=camera_id, width=width, height=height, fps=fps)
+                serial_number_or_name=camera_id, width=width, height=height, fps=fps,
+                use_depth=role == depth_role)
         else:
             camera_configs[role] = OpenCVCameraConfig(
                 index_or_path=int(camera_id) if camera_id.isdecimal() else camera_id,
@@ -102,12 +106,12 @@ class SO101Robot(Robot):
     action_dim = 6
     action_space_name = 'joint_position'
 
-    def __init__(self, config, *, control_mode='joint_pos'):
+    def __init__(self, config, *, control_mode='joint_pos', depth=False):
         settings = dict(config.adapter_config)
         allowed = {'port', 'robot_id', 'calibration_dir', 'camera_types', 'camera_width',
                    'camera_height', 'camera_fps', 'joint_low', 'joint_high',
                    'max_relative_target', 'return_to_start', 'return_step_deg', 'start_poses',
-                   'eef_urdf_path'}
+                   'eef_urdf_path', 'depth_camera'}
         if settings.keys() - allowed:
             raise ValueError(f'Unknown SO101 settings: {sorted(settings.keys() - allowed)}')
         port, robot_id = settings.get('port'), settings.get('robot_id')
@@ -164,13 +168,25 @@ class SO101Robot(Robot):
         cameras = {role: (_camera_type(camera_id, camera_types.get(role)), camera_id, *sizes)
                    for role, camera_id in config.cameras.items()}
         self.image_size = (config.image_width, config.image_height)
+        self.depth = None
+        if depth:
+            from .so101_depth import AlignedDepth
+            realsense = [role for role, spec in cameras.items() if spec[0] == 'realsense']
+            role = settings.get('depth_camera') or (realsense[0] if realsense else None)
+            if role not in realsense:
+                raise ValueError('SO101 depth needs a RealSense camera role (adapter_config.depth_camera)')
+            self.depth = AlignedDepth(role, self.image_size)
         if control_mode == 'eef_delta_pose':
             from .so101_eef import SO101EEFController
             self.eef = SO101EEFController(self, settings['eef_urdf_path'])
         self.follower, self.start, self.closed = None, None, False
         self.eef_motion_failed = False
         try:
-            self.follower = _open_follower(port, robot_id, calibration_dir, cameras, max_relative_target)
+            open_args = (port, robot_id, calibration_dir, cameras, max_relative_target)
+            self.follower = (_open_follower(*open_args, depth_role=self.depth.role) if self.depth
+                             else _open_follower(*open_args))
+            if self.depth is not None:
+                self.depth.install(self.follower.cameras[self.depth.role])
             # The operator places the arm in its rest pose before each trial.
             self.start = self._positions(self.follower.get_observation())
         except BaseException:
@@ -207,6 +223,10 @@ class SO101Robot(Robot):
         except Exception:
             self.eef_motion_failed = True
             raise
+        if self.depth is not None:
+            depth, intrinsics = self.depth.read(self.follower.cameras[self.depth.role])
+            extra = {**extra, f'{self.depth.role}_depth_m': depth,
+                     f'{self.depth.role}_intrinsics': intrinsics}
         return RobotObservation(images, positions[:5].astype(np.float32), positions[5:].astype(np.float32),
                                 np.empty(0, dtype=np.float32), extra)
 
