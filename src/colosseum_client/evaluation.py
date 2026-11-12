@@ -26,6 +26,7 @@ from .adapters import make_robot
 from .diagnostics import read_observation, execute_robot_action_async, close_resources
 from .client import ColosseumClient, ProtocolError
 from .recording import TrialRecorder
+from .task_annotations import difficulty, exported_difficulties, set_difficulty
 from .http_diagnostics import log_http_error
 from .navigation import ROVER_TYPE
 from .robot_runner import action_chunk, protobuf_observation
@@ -381,10 +382,10 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
             options = {'before_start': confirm_live} if local_mode and not config.test else {}
             metadata = await client.connect(evaluation_run=run['id'], institution=config.institution, **options)
             native_mode = getattr(client, 'native_control_mode', 'joint_pos')
-            trial_hz = (client.model['control_hz'] if local_mode and client.model.get('model_type') == 'llm'
-                        else config.control_hz)
+            # Local runs follow the assigned model's rate, so one session can run 15 and 30 Hz models.
+            trial_hz = client.model.get('control_hz', config.control_hz) if local_mode else config.control_hz
             if type(trial_hz) is not int or trial_hz <= 0:
-                raise ProtocolError('Assigned LLM control_hz must be a positive integer')
+                raise ProtocolError('Assigned control_hz must be a positive integer')
             if local_mode:
                 mode = native_mode
                 if mode == 'eef_delta_pose' and not execute_action:
@@ -392,6 +393,9 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                 factory_options = {'action_space': client.model['action_space']}
                 if mode == 'eef_delta_pose':
                     factory_options['control_mode'] = mode
+                if 'depth' in getattr(client, 'observation_extras', ()):
+                    # Only sent to the local Policy Server; recordings stay RGB.
+                    factory_options['depth'] = True
                 robot = await robot_call(robot_factory, config, **factory_options)
                 prepare_trial = getattr(robot, 'prepare_for_trial', None)
                 if prepare_trial is not None:
@@ -575,6 +579,14 @@ def select_task(api, robot, test=False):
         print(f'Enter a number from 1 to {len(tasks)}.')
 
 
+def prompt_task_difficulty():
+    while True:
+        try:
+            return difficulty(ask('Task difficulty (1-10; 1 easiest, 10 hardest): ').strip(), required=True)
+        except ValueError as exc:
+            print(str(exc))
+
+
 def run_evaluation(config, *, track=None, resume=None, abort=None, execute_action=True):
     track = track or config.track or None
     if config.robot_type == ROVER_TYPE and not (resume or abort):
@@ -697,6 +709,11 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                     save(manifest, local)
                 if config.recording:
                     from .lerobot_export import export_trial
+                    value = local.get('task_difficulty')
+                    if value is None and not exported_difficulties(folder, local):
+                        value = prompt_task_difficulty()
+                    set_difficulty(folder, local, value)
+                    save(manifest, local)
                     context_path = run_path / 'recording-context.json'
                     if not context_path.exists():
                         raise ValueError('This older recording lacks the context required for LeRobot export')
@@ -713,6 +730,8 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                             'scene': assignment.get('scene', config.scene),
                             'evaluator': assignment.get('evaluator', config.evaluator),
                             'outcome': local['outcomes'][run['side']],
+                            **({'task_difficulty': local['task_difficulty'], 'task_difficulty_scale': 10}
+                               if local.get('task_difficulty') is not None else {}),
                             **({'goal': task['goal']} if task.get('goal') else {})})
                     print(f'LeRobot dataset saved: {dataset}', flush=True)
             if 'result' not in local:

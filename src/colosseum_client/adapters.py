@@ -40,7 +40,8 @@ def load_adapter_factory(name: str):
     return factory
 
 
-def make_robot(config: RobotClientConfig, *, action_space: str = "joint_position", control_mode: str = "joint_pos") -> Robot:
+def make_robot(config: RobotClientConfig, *, action_space: str = "joint_position", control_mode: str = "joint_pos",
+               depth: bool = False) -> Robot:
     if config.test or config.robot_type == 'test':
         return TestRobot(config, control_mode=control_mode)
     if config.robot_type == 'yam' and action_space == 'eef_abs_pose':
@@ -52,8 +53,10 @@ def make_robot(config: RobotClientConfig, *, action_space: str = "joint_position
     if config.robot_type == 'franka':
         return DroidRobot(config.cameras, action_space=action_space,
                           image_size=(config.image_width, config.image_height))
-    if config.robot_type == 'so101' and control_mode == 'eef_delta_pose':
-        return load_adapter_factory(config.robot_type)(config, control_mode=control_mode)
+    if config.robot_type == 'so101' and (control_mode == 'eef_delta_pose' or depth):
+        return load_adapter_factory(config.robot_type)(config, control_mode=control_mode, depth=depth)
+    if depth:
+        raise ValueError(f'{config.robot_type} cannot stream depth to the Policy Server')
     return load_adapter_factory(config.robot_type)(config)
 
 

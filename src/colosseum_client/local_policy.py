@@ -49,6 +49,7 @@ class LocalPolicyClient(ColosseumClient):
         self.llm_account_logins = dict(getattr(config, "llm_account_logins", {}))
         self.llm_control_mode = getattr(config, "llm_control_mode", "joint_pos")
         self.native_control_mode = "joint_pos"
+        self.observation_extras = ()
         self.native_action_dim = None
         self.router_token = config.token
         self.institution = config.institution.strip()
@@ -85,10 +86,9 @@ class LocalPolicyClient(ColosseumClient):
         self.model = self.router_model
         self.task = preparation['task']
         dimensions = {a.name: a.action_dim for a in self.robot_spec.action_spaces}
-        llm_assigned = self.model.get('model_type') == 'llm'
+        # control_hz is not checked: the trial runs at the assigned model's rate.
         if (not verification_only and not self.test_robot and not self.use_local_action_contract
-                and (dimensions.get(self.model['action_space']) != self.model['action_dim']
-                     or (not llm_assigned and self.model['control_hz'] != self.robot_spec.control_hz))):
+                and dimensions.get(self.model['action_space']) != self.model['action_dim']):
             raise ProtocolError('Assigned model does not support this robot action contract')
         simulate = False
         # Router credentials never travel to the local service.
@@ -138,8 +138,9 @@ class LocalPolicyClient(ColosseumClient):
                     raise ProtocolError('Local model revision/profile mismatch')
                 mode = ready.get('control_mode', 'joint_pos')
                 internal_dim = ready.get('internal_action_dim', self.model['action_dim'])
-                expected_mode = (self.llm_control_mode if self.model.get('model_type') == 'llm'
-                                 else 'joint_pos')
+                capx = str(self.model.get('name', '')).endswith('-capx')
+                expected_mode = (self.llm_control_mode
+                                 if self.model.get('model_type') == 'llm' and not capx else 'joint_pos')
                 if mode == 'eef_abs_pose' and self.use_local_action_contract:
                     # YAM EE: the effective model in ready.message carries the action space.
                     expected_mode = mode
@@ -148,6 +149,16 @@ class LocalPolicyClient(ColosseumClient):
                     raise ProtocolError('Local control mode or internal action dimension differs from Client config')
                 self.native_control_mode = mode
                 self.native_action_dim = internal_dim
+                extras = []
+                raw_extras = ready.get('message')
+                if isinstance(raw_extras, str) and raw_extras.startswith('{'):
+                    with contextlib.suppress(json.JSONDecodeError):
+                        parsed_extras = json.loads(raw_extras)
+                        if isinstance(parsed_extras, dict):
+                            extras = parsed_extras.get('observation_extras', [])
+                if not isinstance(extras, list) or not set(extras) <= {'depth'}:
+                    raise ProtocolError('Unsupported observation_extras in local readiness')
+                self.observation_extras = tuple(extras)
                 if self.use_local_action_contract:
                     extra = {}
                     raw_message = ready.get('message')
@@ -166,7 +177,7 @@ class LocalPolicyClient(ColosseumClient):
                         raise ProtocolError('Local effective model identity mismatch')
                     if (dimensions.get(effective.get('action_space')) != effective.get('action_dim')
                             or (effective.get('model_type') != 'llm'
-                                and effective.get('control_hz') != self.robot_spec.control_hz)):
+                                and effective.get('control_hz') != self.router_model.get('control_hz'))):
                         raise ProtocolError('Local effective model does not support this robot action contract')
                     self.model = effective
                 break
