@@ -1,12 +1,14 @@
-"""One-window YAM eval station: setup checks, live A/B recording, then review and submit.
+"""One-window eval station (YAM or SO101): setup checks, live A/B recording, then review and submit.
 
-  .venv/bin/python scripts/eval_gui.py --config configs/robot.yam-joint-llm.yaml
+  .venv/bin/python scripts/eval_gui.py --config configs/robot.so101.yaml
   open http://127.0.0.1:8770
 
 Needs the gui extra (uv pip install --python .venv/bin/python -e '.[gui]').
 It starts and stops the local Policy Server itself, keeps the LLM API keys in local/llm-keys.env
 (set and verified from the Setup page), and records with scripts/record_evals.py. Scoring and
 Submit/Discard reuse scripts/review_evals.py. Bound to 127.0.0.1 only.
+Offline mode (--offline, or the switch in the header) needs no internet: scripts/offline_router.py
+picks two local policies at random instead of the Router, and nothing is uploaded.
 """
 import argparse
 import asyncio
@@ -14,12 +16,12 @@ import collections
 import contextlib
 import io
 import json
+import logging
 import os
 import re
 import shlex
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -32,6 +34,7 @@ from urllib.parse import urlsplit
 import httpx
 import numpy as np
 import uvicorn
+import yaml
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from PIL import Image
@@ -39,6 +42,7 @@ from PIL import Image
 HERE = Path(__file__).resolve().parent
 CLIENT = HERE.parent
 sys.path.insert(0, str(HERE))
+import offline_router as offline  # noqa: E402
 import record_evals  # noqa: E402
 import review_evals as rv  # noqa: E402
 
@@ -48,6 +52,15 @@ from colosseum_client.robot_config import RobotClientConfig  # noqa: E402
 CAMS = rv.CAMS
 TOP = 'head_image'
 CAN_RESET = '/home/rc1/lerobot/i2rt/scripts/reset_all_can.sh'
+OFFLINE = [False]  # no internet: no Router, no uploads, two random local policies per eval
+
+
+def so101():
+    return CONFIG.robot_type == 'so101'
+
+
+def arms_word():
+    return 'arm returns to its start pose' if so101() else 'arms return to zero'
 
 
 # ---------- shared state ----------
@@ -67,6 +80,7 @@ class State:
         self.frame_seq = 0
         self.thumbs = {}           # camera -> jpeg bytes from the camera check
         self.last_obs = None       # latest robot observation, for holding the pose after Stop
+        self.held = None           # (policy action replaced after Stop, the hold sent instead)
 
     def touch(self):
         self.version += 1
@@ -87,7 +101,7 @@ class State:
 
 
 S = State()
-HW = threading.Lock()  # cameras and CAN buses: one user at a time
+HW = threading.Lock()  # cameras and robot buses: one user at a time
 
 
 class Tee(io.TextIOBase):
@@ -119,6 +133,15 @@ class Tee(io.TextIOBase):
             S.set_run(phase='saving', message='Saving the recording…')
 
 
+class ClientWarnings(logging.Handler):
+    """Client warnings go to the log, and a failed cleanup (the arm may not be home) to the run message."""
+    def emit(self, record):
+        msg = record.getMessage()
+        print(f'{record.levelname} {record.name}: {msg}')
+        if 'Robot cleanup failed' in msg:
+            S.set_run(message=f'⚠ {msg}: the arm may not be at its start pose. Check it before the next run.')
+
+
 def jpeg(rgb, width=None, quality=80):
     img = Image.fromarray(np.asarray(rgb, dtype=np.uint8))
     if width and img.width > width:
@@ -138,13 +161,32 @@ def source_env(path):
     return {k: v for k, v in env.items() if k not in ('PATH', 'PWD', 'SHLVL', '_', 'OLDPWD')}
 
 
-def port_open(url, timeout=1.0):
-    parts = urlsplit(url)
-    try:
-        with socket.create_connection((parts.hostname, parts.port or 80), timeout=timeout):
-            return True
-    except OSError:
-        return False
+def port_open(url):
+    """Whether a local socket listens on the URL's port, read from the kernel table. Connecting to probe
+    would make the Policy Server's websockets log an "opening handshake failed" traceback every poll."""
+    port = urlsplit(url).port or 80
+    for table in ('/proc/net/tcp', '/proc/net/tcp6'):
+        try:
+            rows = Path(table).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            fields = row.split()
+            if fields[3] == '0A' and int(fields[1].rsplit(':', 1)[1], 16) == port:
+                return True
+    if sys.platform == 'darwin':  # LOCAL PATCH (macOS has no /proc): ask lsof, which does not connect either
+        out = subprocess.run(['lsof', '-nP', f'-iTCP:{port}', '-sTCP:LISTEN'], capture_output=True, text=True)
+        return out.returncode == 0 and 'LISTEN' in out.stdout
+    return False
+
+
+def claude_cli():
+    """The Claude Code CLI: on PATH, or the one bundled with the VS Code extension."""
+    found = shutil.which('claude')
+    if found:
+        return found
+    bundled = sorted(Path.home().glob('.vscode/extensions/anthropic.claude-code-*/resources/native-binary/claude'))
+    return str(bundled[-1]) if bundled else 'claude'
 
 
 # ---------- setup checks ----------
@@ -180,6 +222,8 @@ def gpu_apps():
 
 def check_gpu():
     S.set_check('gpu', 'running', 'Looking at the GPU…')
+    if not shutil.which('nvidia-smi'):  # LOCAL PATCH: Mac rig, models run remotely (Hopper via Tailscale)
+        return S.set_check('gpu', 'ok', 'No local GPU: models run remotely')
     try:
         apps = gpu_apps()
     except Exception as e:
@@ -214,6 +258,8 @@ def can_links():
 
 
 def check_can(reset=False):
+    if so101():
+        return check_usb()
     S.set_check('can', 'running', 'Bringing CAN up (enter your password in the pop-up)…' if reset else 'Checking CAN…')
     if reset:
         out = subprocess.run(['pkexec', 'bash', CAN_RESET], capture_output=True, text=True)
@@ -227,12 +273,25 @@ def check_can(reset=False):
     S.set_check('can', 'ok', ' · '.join(f'{c} up' for c in need))
 
 
+def check_usb():
+    """SO101: the arm's USB serial adapter is plugged in and this user may open it."""
+    S.set_check('can', 'running', 'Looking for the arm’s USB adapter…')
+    port = CONFIG.adapter_config.get('port', '')
+    if not Path(port).exists():
+        return S.set_check('can', 'fail', f'{Path(port).name} not found. Check the arm’s USB cable.')
+    if not os.access(port, os.R_OK | os.W_OK):
+        return S.set_check('can', 'fail', f'No permission for {port}: run scripts/fix_serial_permissions.sh')
+    S.set_check('can', 'ok', f'USB adapter at {os.path.realpath(port)}')
+
+
 def check_arms():
-    """Read every motor's registers without enabling it: proves both arms answer, nothing moves."""
+    """Read every motor's registers without enabling it: proves the arm(s) answer, nothing moves."""
     if S.checks['can']['status'] != 'ok':
         check_can()
         if S.checks['can']['status'] != 'ok':
-            return S.set_check('arms', 'fail', 'Bring CAN up first')
+            return S.set_check('arms', 'fail', 'Connect the arm’s USB cable first' if so101() else 'Bring CAN up first')
+    if so101():
+        return check_so101_arm()
     S.set_check('arms', 'running', 'Asking every motor to answer (no power to the motors)…')
     try:
         from i2rt.motor_drivers.motor_check import run_startup_checks
@@ -263,9 +322,66 @@ def check_arms():
     S.set_check('arms', 'ok' if ok else 'fail', detail)
 
 
+def check_so101_arm():
+    """SO101: open the Feetech bus only (no cameras, no motor configuration, torque left as it is), compare the
+    motors' calibration with the LeRobot calibration file, and read every position."""
+    S.set_check('arms', 'running', 'Asking every motor to answer (no power to the motors)…')
+    settings = CONFIG.adapter_config
+    robot_id = settings.get('robot_id', '')
+    try:
+        from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
+    except ImportError:
+        return S.set_check('arms', 'fail', 'LeRobot is not installed in the client environment')
+    follower = SO101Follower(SO101FollowerConfig(port=settings.get('port', ''), id=robot_id, use_degrees=True,
+                                                 calibration_dir=settings.get('calibration_dir')))
+    if not follower.calibration:
+        return S.set_check('arms', 'fail', f'No calibration file for {robot_id} in {follower.calibration_dir}')
+    if not HW.acquire(blocking=False):
+        return S.set_check('arms', 'fail', 'The robot is busy (camera preview or an evaluation)')
+    try:
+        try:
+            follower.bus.connect()
+        except Exception as e:
+            if 'Missing motor IDs' in str(e):
+                return S.set_check('arms', 'fail', 'The USB adapter answers but no motor does: '
+                                                   'is the arm’s power supply switched on?')
+            return S.set_check('arms', 'fail', f'{type(e).__name__}: {e}'[:300])
+        try:
+            if not follower.bus.is_calibrated:
+                return S.set_check('arms', 'fail', f'The motors’ calibration does not match {robot_id}.json. '
+                                                   'Restore it (lerobot-calibrate) before evaluating.')
+            positions = follower.bus.sync_read('Present_Position')
+        finally:
+            follower.bus.disconnect(disable_torque=False)
+    finally:
+        HW.release()
+    S.set_check('arms', 'ok', f'✓ {len(positions)}/{len(positions)} motors, calibrated ({robot_id})')
+
+
+def open_camera(name):
+    """A connected camera with read() and close(): the YAM RealSense reader, or the SO101 driver's LeRobot one."""
+    if not so101():
+        from colosseum_client.robots.yam import _RealSenseCamera
+        return _RealSenseCamera(CONFIG.cameras[name], 3000)
+    from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+    from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+    from lerobot.cameras.utils import make_cameras_from_configs
+    from colosseum_client.robots.so101 import _camera_type
+    settings, camera_id = CONFIG.adapter_config, CONFIG.cameras[name]
+    size = dict(width=settings.get('camera_width', 640), height=settings.get('camera_height', 480),
+                fps=settings.get('camera_fps', 30))
+    if _camera_type(camera_id, settings.get('camera_types', {}).get(name)) == 'realsense':
+        cfg = RealSenseCameraConfig(serial_number_or_name=camera_id, **size)
+    else:
+        cfg = OpenCVCameraConfig(index_or_path=int(camera_id) if camera_id.isdecimal() else camera_id, **size)
+    cam = make_cameras_from_configs({name: cfg})[name]
+    cam.connect()
+    cam.close = cam.disconnect
+    return cam
+
+
 def check_cameras():
     S.set_check('cameras', 'running', 'Capturing a frame from each camera…')
-    from colosseum_client.robots.yam import _RealSenseCamera
     if not HW.acquire(blocking=False):
         return S.set_check('cameras', 'fail', 'Cameras are busy (preview or an evaluation)')
     bad, dark, thumbs = [], [], {}
@@ -273,7 +389,7 @@ def check_cameras():
         for name, serial in CONFIG.cameras.items():
             cam = None
             try:
-                cam = _RealSenseCamera(serial, 3000)
+                cam = open_camera(name)
                 for _ in range(30):  # the first frames are black until auto-exposure settles
                     frame = cam.read()
                 thumbs[name] = jpeg(frame, 640)
@@ -294,13 +410,27 @@ def check_cameras():
         S.touch()
     if bad:
         return S.set_check('cameras', 'fail', '; '.join(bad) + '. Check the USB cable.')
+    if not shutil.which('ffmpeg'):  # the client's recorder refuses to start a trial without it
+        return S.set_check('cameras', 'fail', f'{len(thumbs)}/{len(CONFIG.cameras)} cameras, but ffmpeg is not '
+                                              'installed and recording needs it: sudo apt install ffmpeg')
     S.set_check('cameras', 'ok', f'{len(thumbs)}/{len(CONFIG.cameras)} cameras'
                 + (f" · very dark: {', '.join(dark)} (lights off or lens covered?)" if dark else ''))
 
 
+def offline_policies():
+    return offline.policies(ARGS.server_dir / ARGS.server_config, CONFIG)
+
+
 def check_router():
+    if OFFLINE[0]:
+        names = [name for name, _ in offline_policies()]
+        if len(names) < 2:
+            return S.set_check('router', 'fail', f'Offline mode needs two local policies in {ARGS.server_config}; '
+                                                 f"found {', '.join(names) or 'none'}")
+        return S.set_check('router', 'ok', f"Offline: not used. Each eval picks 2 of {len(names)} local policies "
+                                           f"at random ({', '.join(names)}). Nothing is uploaded.")
     S.set_check('router', 'running', 'Contacting the Router…')
-    api = ev.EvalAPI(CONFIG)
+    api = offline.RealEvalAPI(CONFIG)
     try:
         api.request('GET', '/tasks?robot_id=' + CONFIG.robot_type)
         S.set_check('router', 'ok', f'Connected as {CONFIG.institution}')
@@ -316,6 +446,15 @@ PROVIDERS = {'openai': ('OpenAI · GPT', 'OPENAI_API_KEY'), 'xai': ('xAI · Grok
 KEYS = {}        # provider -> key, loaded from --llm-keys
 KEY_OK = set()   # providers whose key passed the last verification
 CLAUDE_LOGIN = [False]  # Claude runs on the Claude Code login (no Anthropic key saved) and it works
+
+
+def llm_policies():
+    """Whether the Policy Server config serves any cloud LLM policy (they are the ones that need API keys)."""
+    try:
+        raw = yaml.safe_load((ARGS.server_dir / ARGS.server_config).read_text()) or {}
+    except OSError:
+        return True
+    return any(m.get('model_type', 'vla') != 'vla' for m in raw.get('models') or [])
 
 
 def verify_key(provider, key):
@@ -344,7 +483,7 @@ def verify_key(provider, key):
 def claude_login():
     """Claude Code login (Claude subscription) used for Claude when no Anthropic API key is saved."""
     try:
-        out = subprocess.run(['claude', 'auth', 'status', '--text'], capture_output=True, text=True,
+        out = subprocess.run([claude_cli(), 'auth', 'status', '--text'], capture_output=True, text=True,
                              timeout=30, env={**os.environ, **CLAUDE_ENV})
     except (OSError, subprocess.TimeoutExpired):
         return False, 'Claude Code CLI not found'
@@ -355,11 +494,19 @@ def claude_login():
 
 
 def check_keys():
+    if OFFLINE[0]:
+        with S.lock:
+            S.keys = []
+            S.touch()
+        return S.set_check('keys', 'ok', 'Not needed offline: cloud LLM policies are left out.')
     S.set_check('keys', 'running', 'Checking each API key with its provider…')
+    needed = llm_policies()
     rows, problems = [], []
     CLAUDE_LOGIN[0] = False
     for provider, (label, _) in PROVIDERS.items():
         key = KEYS.get(provider, '')
+        if not key and not needed and provider != 'anthropic':
+            continue  # no LLM policy to serve; only Claude matters, for the review feedback
         ok, msg = verify_key(provider, key) if key else (False, 'missing')
         (KEY_OK.add if ok else KEY_OK.discard)(provider)
         shown = 'API key' if key else ''  # how it authenticates; no part of a key leaves this process
@@ -372,8 +519,11 @@ def check_keys():
     with S.lock:
         S.keys = rows
         S.touch()
-    if problems:
+    if problems and needed:
         return S.set_check('keys', 'fail', 'Please check your keys: ' + '; '.join(problems) + '.')
+    if not needed:
+        return S.set_check('keys', 'ok', 'Not needed by these policies (no cloud LLM). Claude writes the review '
+                                         'feedback' + ('.' if not problems else ' once a key or login works.'))
     S.set_check('keys', 'ok', 'All keys work' + (' (Claude via the Claude Code login)' if CLAUDE_LOGIN[0] else ''))
 
 
@@ -484,10 +634,9 @@ class Preview:
         return True
 
     def loop(self):
-        from colosseum_client.robots.yam import _RealSenseCamera
         cam = None
         try:
-            cam = _RealSenseCamera(CONFIG.cameras[TOP], 3000)
+            cam = open_camera(TOP)
             while not self.stop_event.is_set():
                 S.push_frame(cam.read())
         except Exception as e:
@@ -585,9 +734,25 @@ class Prompts:
 PROMPTS = Prompts()
 
 
+class HeldRecorder(ev.TrialRecorder):
+    """The trial recorder, logging the hold actually commanded after Stop instead of the policy action it
+    replaced; for SO101 it also marks the return to the start pose, which the driver does after recording."""
+    def add(self, observation, action=None, **k):
+        held = S.held
+        if held is not None and action is held[0]:
+            action = held[1]
+        return super().add(observation, action, **k)
+
+    def close(self):
+        try:
+            return super().close()
+        finally:
+            if so101() and S.run['phase'] in ('running', 'stopping', 'saving'):
+                S.set_run(phase='homing', message='Returning the arm to its start pose…')
+
+
 def install_hooks():
     """Observe and steer the unchanged evaluation loop: live frames, A/B side, finish button, prompts."""
-    from colosseum_client.robots import yam
     read = ev.read_observation
 
     def observe(robot, step, phase):
@@ -608,7 +773,17 @@ def install_hooks():
         if not PROMPTS.finish_now.is_set():
             return await execute(robot, action, step, robot_call, enabled)
         obs = S.last_obs
-        return np.r_[obs.joints[:6], obs.gripper[:1], obs.joints[6:], obs.gripper[1:]].astype(np.float32)
+        if not so101():
+            hold = np.r_[obs.joints[:6], obs.gripper[:1], obs.joints[6:], obs.gripper[1:]].astype(np.float32)
+            S.held = (action, hold)
+            return hold
+        if getattr(robot, 'eef', None) is not None:
+            # SO101 EEF must report the joint command it accepted: finish this one step as planned.
+            return await execute(robot, action, step, robot_call, enabled)
+        # SO101 joint control: command the measured pose so the arm stops where it is.
+        hold = np.r_[obs.joints, obs.gripper].astype(np.float32)
+        S.held = (action, hold)
+        return await execute(robot, hold, step, robot_call, enabled)
     ev.execute_robot_action_async = execute_unless_stopped
 
     trial = ev.run_trial
@@ -616,6 +791,7 @@ def install_hooks():
     async def run_trial(config, assignment, run, path, *a, **k):
         PROMPTS.finish_now.clear()
         PROMPTS.stop_reason = None
+        S.held = None
         S.set_run(side=run['side'], step=0, max_steps=assignment['task'].get('max_steps', config.max_trial_steps),
                   eval_id=assignment['id'], instruction=assignment['task'].get('instruction', ''))
         try:
@@ -627,9 +803,13 @@ def install_hooks():
                     {'reason': PROMPTS.stop_reason, 'step': S.run['step']}))
             S.set_run(phase='between', message=f"Policy {run['side']} finished.")
     ev.run_trial = run_trial
+    ev.TrialRecorder = HeldRecorder
     ev.sys = PROMPTS_SYS
     ev.select = PROMPTS
-    yam.YAMRobot._zero_recovery_choice = staticmethod(PROMPTS.recovery_choice)
+    if not so101():
+        from colosseum_client.robots import yam
+        yam.YAMRobot._zero_recovery_choice = staticmethod(PROMPTS.recovery_choice)
+    logging.getLogger('colosseum_client').addHandler(ClientWarnings(logging.WARNING))
 
 
 class _Sys:
@@ -640,15 +820,20 @@ PROMPTS_SYS = _Sys()
 
 
 def record_thread(form):
+    # The Router assigns LLM policies to stations that offer LLM credentials, so offer them only when
+    # this Policy Server serves an LLM policy; otherwise it would get a model it cannot run.
+    serves_llm = llm_policies()
     config = replace(CONFIG, track='open', instruction=form.get('instruction', '').strip(),
                      scene=form.get('scene', '').strip() or CONFIG.scene,
                      evaluator=form.get('evaluator', '').strip() or CONFIG.evaluator,
                      max_trial_steps=int(form.get('max_steps') or CONFIG.max_trial_steps),
-                     llm_api_keys={p: KEYS[p] for p in KEY_OK if p in KEYS},
-                     llm_account_logins={'anthropic': 'claude-code'} if CLAUDE_LOGIN[0] else {})
+                     llm_api_keys={p: KEYS[p] for p in KEY_OK if p in KEYS} if serves_llm else {},
+                     llm_account_logins={'anthropic': 'claude-code'} if CLAUDE_LOGIN[0] and serves_llm else {})
     resume = form.get('resume') or None
+    offline.ACTIVE = offline.is_offline(resume) if resume else OFFLINE[0]
     S.set_run(phase='starting', side=None, step=0, max_steps=config.max_trial_steps, eval_id=resume,
-              instruction=config.instruction, message='Asking the Router for two policies…')
+              instruction=config.instruction, message='Picking two local policies at random…' if offline.ACTIVE
+              else 'Asking the Router for two policies…')
     try:
         eval_id = record_evals.record(config, resume=resume, ask=PROMPTS.ask)
         if eval_id:
@@ -679,10 +864,10 @@ def eval_summary(path):
     d = json.loads(path.read_text())
     a = d['assignment']
     state = ('submitted' if d.get('submitted') else 'discarded' if d.get('discarded')
-             else 'superseded' if d.get('review') == 'superseded'
+             else 'kept' if d.get('kept_offline') else 'superseded' if d.get('review') == 'superseded'
              else 'scored' if 'result' in d else 'review' if d.get('review') == 'pending' else 'interrupted')
     return {'id': a['id'], 'instruction': a.get('task', {}).get('instruction', ''), 'scene': a.get('scene', ''),
-            'state': state, 'time': path.stat().st_mtime, 'busy': rv.busy(a['id'])}
+            'state': state, 'time': path.stat().st_mtime, 'busy': rv.busy(a['id']), 'offline': offline.is_offline(a['id'])}
 
 
 def notes_path(eid):
@@ -722,6 +907,17 @@ def eval_detail(eid):
             'preference': res.get('preference') or draft.get('preference') or '',
             'feedback': res.get('feedback', draft.get('feedback', '')),
             'log': log.read_text()[-4000:] if log.exists() else ''}
+
+
+def close_offline(eid, **mark):
+    """Submit/Discard for an offline eval: marked in its manifest only, never sent."""
+    path = rv.ROOT / eid / 'manifest.json'
+    d = json.loads(path.read_text())
+    d.update(mark)
+    d.pop('review', None)
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(d, indent=2))
+    tmp.replace(path)
 
 
 def plain(msg):
@@ -773,6 +969,17 @@ def set_keys(body: dict):
     return {'ok': True}
 
 
+@app.post('/api/offline')
+def set_offline(body: dict):
+    if recording():
+        raise HTTPException(409, 'An evaluation is running')
+    OFFLINE[0] = bool(body.get('on'))
+    with S.lock:
+        S.touch()
+    threading.Thread(target=lambda: (check_router(), check_keys()), daemon=True).start()
+    return {'ok': True}
+
+
 @app.get('/api/thumb/{cam}.jpg')
 def thumb(cam: str):
     data = S.thumbs.get(cam)
@@ -797,6 +1004,8 @@ def start_eval(form: dict):
         raise HTTPException(409, 'An evaluation is already running')
     if not form.get('resume') and not form.get('instruction', '').strip():
         raise HTTPException(400, 'Please type the task instruction')
+    if CONFIG.recording and not shutil.which('ffmpeg'):
+        raise HTTPException(400, 'ffmpeg is not installed, and recording needs it: sudo apt install ffmpeg')
     PREVIEW.stop()
     if not HW.acquire(timeout=6):
         raise HTTPException(409, 'The robot is busy with a check; try again in a moment')
@@ -823,12 +1032,12 @@ def reply(body: dict):
 @app.post('/api/eval/finish')
 def finish_now(body: dict):
     """End the current run now: 'stopped' (unsafe) or 'completed'. It is recorded up to this step,
-    the arms return to zero, and the evaluation continues with the next policy."""
+    the arm(s) return to the start pose, and the evaluation continues with the next policy."""
     if S.run['phase'] != 'running':
         raise HTTPException(409, 'No policy is running')
     PROMPTS.stop_reason = 'stopped' if body.get('reason') == 'stopped' else 'completed'
     PROMPTS.finish_now.set()
-    S.set_run(phase='stopping', message='Stopping the policy and returning the arms to zero…'
+    S.set_run(phase='stopping', message=f'Stopping the policy; the {arms_word()}…'
               if PROMPTS.stop_reason == 'stopped' else 'Ending this run…')
     return {'ok': True}
 
@@ -843,8 +1052,11 @@ def reset_run():
 
 @app.get('/api/evals')
 def list_evals():
+    """Evals of the current mode only: offline and online ones are listed (and resumed) separately."""
     out = []
     for m in rv.ROOT.glob('*/manifest.json'):
+        if offline.is_offline(m.parent.name) != OFFLINE[0]:
+            continue
         try:
             out.append(eval_summary(m))
         except Exception:
@@ -867,6 +1079,9 @@ def act_eval(eid: str, body: dict):
         reason = (body.get('reason') or '').strip()
         if not reason:
             raise HTTPException(400, 'A reason is required to discard')
+        if offline.is_offline(eid):
+            close_offline(eid, discarded=True, discard_reason=reason)
+            return {'msg': 'Discarded on this computer.'}
         return {'msg': plain(rv.router(eid, 'discard', reason))}
     if isinstance(body.get('notes'), dict):
         notes = {k: str(v) for k, v in body['notes'].items() if k in ('A', 'B')}
@@ -883,6 +1098,9 @@ def act_eval(eid: str, body: dict):
     if action == 'submit':
         if 'result' not in rv.load(eid):
             raise HTTPException(400, 'Give both runs a score and choose a preference before submitting')
+        if offline.is_offline(eid):
+            close_offline(eid, kept_offline=True)
+            return {'msg': 'Result kept on this computer. Nothing was uploaded.'}
         return {'msg': plain(rv.router(eid, 'submit'))}
     return {'msg': 'Saved on this computer.' if 'result' in rv.load(eid) else
             'Draft saved. Both scores and a preference are needed to submit.'}
@@ -911,6 +1129,16 @@ Overall: <1-2 sentences: which did better and the deciding difference>
 Rules: use only facts from the observations, scores, run endings and factor comparison; never invent
 details. Reflect each compared factor where it fits (a tie means no advantage either way); do not mention
 a factor that is not listed. Keep it consistent with the scores, the factors and the preference. Neutral, specific, no model names, no markdown, under 130 words."""
+
+
+@app.get('/api/evals/{eid}/reveal')
+def reveal(eid: str):
+    """Which policy ran as A and B in an offline eval; only after its result is kept, so scoring stays blind."""
+    d = rv.load(known(eid))
+    if not offline.is_offline(eid) or not d.get('kept_offline'):
+        raise HTTPException(409, 'Keep the result first; the policies are revealed only after that')
+    names = offline.load_state(rv.ROOT / eid)['policies']
+    return {r['side']: names[r['id']]['name'] for r in d['assignment']['runs']}
 
 
 @app.post('/api/evals/{eid}/generate')
@@ -959,7 +1187,7 @@ def generate_feedback(eid: str, body: dict):
 
 def feedback_via_claude_code(prompt):
     try:
-        out = subprocess.run(['claude', '-p', '--model', 'claude-haiku-5-5', '--output-format', 'text',
+        out = subprocess.run([claude_cli(), '-p', '--model', 'claude-haiku-5-5', '--output-format', 'text',
                               '--tools', '', '--effort', 'low'], input=prompt, capture_output=True, text=True,
                              timeout=180, cwd=tempfile.gettempdir(), env={**os.environ, **CLAUDE_ENV})
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -983,7 +1211,7 @@ def video(eid: str, run_id: str, cam: str):
 def snapshot():
     with S.lock:
         return {'checks': S.checks, 'run': dict(S.run), 'prompt': S.prompt, 'log': list(S.log)[-200:],
-                'recording': recording(), 'thumbs': sorted(S.thumbs), 'keys': S.keys, 'preview': bool(PREVIEW.thread and PREVIEW.thread.is_alive())}
+                'recording': recording(), 'thumbs': sorted(S.thumbs), 'keys': S.keys, 'offline': OFFLINE[0], 'preview': bool(PREVIEW.thread and PREVIEW.thread.is_alive())}
 
 
 @app.websocket('/ws')
@@ -1023,7 +1251,7 @@ async def lifespan(app):
 
 def shutdown():
     if recording():
-        print('Window closing during an evaluation: finishing the run so the arms return to zero…')
+        print(f'Window closing during an evaluation: finishing the run so the {arms_word()}…')
         PROMPTS.closing = True
         PROMPTS.finish_now.set()
         PROMPTS.reply(None)
@@ -1035,15 +1263,19 @@ def shutdown():
 def main():
     global ARGS, CONFIG, CLAUDE_ENV
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--config', default=str(CLIENT / 'configs/robot.yam-joint-llm.yaml'))
-    p.add_argument('--server-dir', type=Path, default=Path.home() / 'colosseum-policy-server')
-    p.add_argument('--server-config', default='local/local-runtime-yam-agent-joint.yaml',
-                   help='Policy Server config, relative to --server-dir')
+    p.add_argument('--config', default=str(CLIENT / 'configs/robot.so101.yaml'))
+    p.add_argument('--server-dir', type=Path, default=CLIENT.parent / 'colosseum-policy-server')
+    p.add_argument('--server-config', default='configs/local-runtime-so101.yaml',
+                   help='Policy Server config, relative to --server-dir or to this client folder')
     p.add_argument('--llm-keys', type=Path, default=CLIENT / 'local/llm-keys.env')
     p.add_argument('--claude-env', type=Path, default=CLIENT / 'local/claude-account.env',
                    help='env for the Claude Code login, used for Claude when no Anthropic key is saved')
     p.add_argument('--port', type=int, default=8770)
+    p.add_argument('--offline', action='store_true', help='start in offline mode (no Router, nothing uploaded)')
     ARGS = p.parse_args()
+    if not (ARGS.server_dir / ARGS.server_config).exists() and (CLIENT / ARGS.server_config).exists():
+        ARGS.server_config = str((CLIENT / ARGS.server_config).resolve())
+    OFFLINE[0] = ARGS.offline
     CONFIG = RobotClientConfig.from_yaml(ARGS.config)
     CLAUDE_ENV = source_env(ARGS.claude_env)
     env = source_env(ARGS.llm_keys)
@@ -1052,6 +1284,7 @@ def main():
     rv.CONFIG = Path(ARGS.config).resolve()
     rv.ROOT = (CLIENT / CONFIG.evaluation_dir).resolve()
     rv.CACHE = rv.ROOT.parent / 'eval_review_cache'
+    offline.install(rv.ROOT, ARGS.server_dir / ARGS.server_config)
     os.chdir(CLIENT)
     sys.stdout, sys.stderr = Tee(sys.stdout), Tee(sys.stderr)
     install_hooks()
