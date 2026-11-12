@@ -393,6 +393,9 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                 factory_options = {'action_space': client.model['action_space']}
                 if mode == 'eef_delta_pose':
                     factory_options['control_mode'] = mode
+                if 'depth' in getattr(client, 'observation_extras', ()):
+                    # Only sent to the local Policy Server; recordings stay RGB.
+                    factory_options['depth'] = True
                 robot = await robot_call(robot_factory, config, **factory_options)
                 prepare_trial = getattr(robot, 'prepare_for_trial', None)
                 if prepare_trial is not None:

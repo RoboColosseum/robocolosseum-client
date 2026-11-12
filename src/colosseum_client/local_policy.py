@@ -49,6 +49,7 @@ class LocalPolicyClient(ColosseumClient):
         self.llm_account_logins = dict(getattr(config, "llm_account_logins", {}))
         self.llm_control_mode = getattr(config, "llm_control_mode", "joint_pos")
         self.native_control_mode = "joint_pos"
+        self.observation_extras = ()
         self.native_action_dim = None
         self.router_token = config.token
         self.institution = config.institution.strip()
@@ -137,8 +138,9 @@ class LocalPolicyClient(ColosseumClient):
                     raise ProtocolError('Local model revision/profile mismatch')
                 mode = ready.get('control_mode', 'joint_pos')
                 internal_dim = ready.get('internal_action_dim', self.model['action_dim'])
-                expected_mode = (self.llm_control_mode if self.model.get('model_type') == 'llm'
-                                 else 'joint_pos')
+                capx = str(self.model.get('name', '')).endswith('-capx')
+                expected_mode = (self.llm_control_mode
+                                 if self.model.get('model_type') == 'llm' and not capx else 'joint_pos')
                 if mode == 'eef_abs_pose' and self.use_local_action_contract:
                     # YAM EE: the effective model in ready.message carries the action space.
                     expected_mode = mode
@@ -147,6 +149,16 @@ class LocalPolicyClient(ColosseumClient):
                     raise ProtocolError('Local control mode or internal action dimension differs from Client config')
                 self.native_control_mode = mode
                 self.native_action_dim = internal_dim
+                extras = []
+                raw_extras = ready.get('message')
+                if isinstance(raw_extras, str) and raw_extras.startswith('{'):
+                    with contextlib.suppress(json.JSONDecodeError):
+                        parsed_extras = json.loads(raw_extras)
+                        if isinstance(parsed_extras, dict):
+                            extras = parsed_extras.get('observation_extras', [])
+                if not isinstance(extras, list) or not set(extras) <= {'depth'}:
+                    raise ProtocolError('Unsupported observation_extras in local readiness')
+                self.observation_extras = tuple(extras)
                 if self.use_local_action_contract:
                     extra = {}
                     raw_message = ready.get('message')
