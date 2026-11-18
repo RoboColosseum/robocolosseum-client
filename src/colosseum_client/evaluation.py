@@ -634,6 +634,7 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                 mode = 'local' if config.policy_server_url else 'remote'
                 request = {'robot_id': config.robot_type, 'track': track,
                     'instruction': instruction, 'scene': scene, 'evaluator': config.evaluator, 'institution': config.institution.strip(),
+                    **({'country': config.country.strip().upper()} if config.country.strip() else {}),
                     'inference_mode': mode, 'test': config.test, 'recording': config.recording, 'max_steps': config.max_trial_steps,
                     'cameras': list(config.cameras), **({'task_id': task_id} if track == 'fine-tuning' else {})}
                 if config.robot_type == ROVER_TYPE and track == 'open':
@@ -727,6 +728,7 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                             'action_recording': context.get('action_recording', 'policy_targets'),
                             'execution_enabled': context['execution_enabled'],
                             'institution': assignment.get('institution', config.institution),
+                            'country': assignment.get('country', ''),
                             'scene': assignment.get('scene', config.scene),
                             'evaluator': assignment.get('evaluator', config.evaluator),
                             'outcome': local['outcomes'][run['side']],

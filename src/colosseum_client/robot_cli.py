@@ -19,7 +19,7 @@ def main() -> None:
     parser.add_argument("--inference-only", action="store_true", help="Use the original single-policy inference loop")
     parser.add_argument("--no-execute-action", action="store_true",
                         help="Receive and log actions without executing them on the robot")
-    for name in ('instruction', 'scene', 'evaluator'):
+    for name in ('instruction', 'scene', 'evaluator', 'country'):
         parser.add_argument('--' + name)
     parser.add_argument('--goal-gps', metavar='LAT,LON',
                         help='Earth Rover Open Track: destination coordinates in degrees')
@@ -33,7 +33,7 @@ def main() -> None:
                         help='Earth Rover: which mission checkpoint is the destination (default: the last)')
     args = parser.parse_args()
     config = RobotClientConfig.from_yaml(args.config)
-    overrides = {name: getattr(args, name) for name in ('instruction', 'scene', 'evaluator')
+    overrides = {name: getattr(args, name) for name in ('instruction', 'scene', 'evaluator', 'country')
                  if getattr(args, name) is not None}
     if overrides:
         config = replace(config, **overrides)

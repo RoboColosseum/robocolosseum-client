@@ -105,3 +105,11 @@ deadline_ms: 120000
 itself. Literal key values in a private YAML config are also supported.
 The Client sends only capability names/legacy URLs to Router, never keys.
 Upgrade Router before this Client: `/next` now includes `llm_providers`.
+
+### Evaluation country
+
+Client tokens carry a default `country` (two-letter code, for example `SG` or `CN`).
+The router snapshots it when creating an evaluation. Leave `country` absent or empty
+in the robot YAML to inherit it, or set `country: CN` / pass `--country CN` to override
+that evaluation. `scene` remains the location/setup. Changing token defaults does not
+rewrite saved or resumed evaluations.

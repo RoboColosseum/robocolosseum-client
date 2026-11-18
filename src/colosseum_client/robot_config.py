@@ -17,6 +17,7 @@ class RobotClientConfig:
     llm_account_logins: Mapping[str, str] = field(default_factory=dict)
     llm_control_mode: str = "joint_pos"
     institution: str = ""
+    country: str = ""
     scene: str = ""
     evaluator: str = ""
     track: str = ""
@@ -114,7 +115,7 @@ class RobotClientConfig:
             value.setdefault("cameras", {})
         allowed = {
             "policy_ping_interval", "policy_ping_timeout",
-            "institution", "test", "use_local_action_contract", "scene", "evaluator", "track", "policy_server_url", "prepare_timeout",
+            "institution", "country", "test", "use_local_action_contract", "scene", "evaluator", "track", "policy_server_url", "prepare_timeout",
             "robot_type", "adapter", "adapter_config", "api_url", "evaluation_dir", "recording", "skip_upload", "max_trial_steps",
             "url", "dataset_url", "dataset_token", "dataset_token_file",
             "token", "llm_api_keys", "llm_account_logins", "llm_control_mode",
@@ -163,6 +164,7 @@ class RobotClientConfig:
                 {'front_image' if robot_type == 'earth_rover_mini_plus' else 'head_image': 'dummy'} if value.get('test', False) else {}),
             scene=value.get("scene", ""),
             institution=value.get("institution", ""),
+            country=value.get("country", ""),
             evaluator=value.get("evaluator", ""),
             track=value["track"],
             policy_server_url=value["policy_server_url"],
@@ -222,6 +224,8 @@ class RobotClientConfig:
             parts = urlsplit(url)
             if parts.scheme not in {"ws", "wss"} or not parts.hostname or parts.username or parts.password or parts.fragment:
                 raise ValueError(f"{name} must be a ws:// or wss:// URL without credentials or fragment")
+        if not isinstance(config.country, str) or (config.country.strip() and not re.fullmatch(r"[A-Za-z]{2}", config.country.strip())):
+            raise ValueError("country must be a two-letter country code, e.g. SG or CN")
         if not isinstance(config.scene, str) or len(config.scene) > 4000:
             raise ValueError("scene must be a string of at most 4000 characters")
         if not isinstance(config.evaluator, str) or len(config.evaluator) > 200:
