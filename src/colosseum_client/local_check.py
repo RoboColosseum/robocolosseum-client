@@ -42,6 +42,7 @@ def run_check(config, *, run_id=None, task_id=None, prompt=None):
             assignment = api.request('POST', '/next', dict(robot_id=config.robot_type, track=config.track,
                 inference_mode='local', test=config.test, task_id=task_id,
                 instruction=prompt, institution=config.institution.strip(), scene=config.scene, evaluator=config.evaluator,
+                **({'country': config.country.strip().upper()} if config.country.strip() else {}),
                 max_steps=config.max_trial_steps, cameras=list(config.cameras) or ['head_image']))
             run_id = next((r['id'] for r in assignment['runs'] if r['state'] == 'assigned'), None)
             if not run_id:

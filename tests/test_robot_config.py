@@ -204,3 +204,19 @@ def test_dummy_rover_defaults_to_the_front_camera(tmp_path):
     assert config.cameras == {'front_image': 'dummy'}
     adapter = make_robot(config)
     assert isinstance(adapter, TestRobot) and adapter.get_observation().images['front_image'].shape == (288, 512, 3)
+
+
+@pytest.mark.parametrize('country', ['', 'SG', 'cn'])
+def test_country_override_config(tmp_path, country):
+    path = tmp_path / 'country.yaml'
+    path.write_text(f'url: wss://router.example.com\ntoken: clt_test\ncameras: {{head_image: 123}}\ncountry: "{country}"\n')
+    assert RobotClientConfig.from_yaml(path).country == country
+
+
+@pytest.mark.parametrize('country', ['Singapore', '12', 123])
+def test_country_override_rejects_invalid(tmp_path, country):
+    import yaml
+    path = tmp_path / 'country.yaml'
+    path.write_text(yaml.safe_dump(dict(url='wss://router.example.com', token='clt_test', cameras={'head_image': '123'}, country=country)))
+    with pytest.raises(ValueError, match='country'):
+        RobotClientConfig.from_yaml(path)
