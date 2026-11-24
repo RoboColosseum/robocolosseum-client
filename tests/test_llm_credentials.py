@@ -67,15 +67,29 @@ def test_yaml_loading(tmp_path, monkeypatch):
     path.write_text('url: wss://router.example\ntoken: test\ntest: true\npolicy_server_url: ws://localhost:8000\nllm_api_keys:\n  xai: env:TEST_XAI_KEY\n')
     assert RobotClientConfig.from_yaml(path).llm_api_keys == {'xai': 'secret'}
 
-@pytest.mark.parametrize('name,provider', [('gpt-6-astra','openai'), ('grok-4.7','xai'), ('claude-opus-5-5','anthropic')])
+@pytest.mark.parametrize('name,provider', [('gpt-6-astra','openai'), ('grok-4.7','xai'), ('claude-opus-5-5','anthropic'),
+                                           ('gemini-4-hydrogen','google')])
 def test_shared_relay_selects_key_by_model_name(name, provider):
-    keys = {'openai':'gpt-secret', 'xai':'grok-secret', 'anthropic':'claude-secret'}
+    keys = {'openai':'gpt-secret', 'xai':'grok-secret', 'anthropic':'claude-secret', 'google':'gemini-secret'}
     prepare = {'model': {'model_type':'llm', 'name':name, 'url':'https://api.yhlxj.ai/v1'}}
     actual = local_preparation(prepare, keys, 'ws://localhost:8000')
     assert actual['api_key'] == keys[provider]
     assert 'api_key' not in prepare
     with pytest.raises(ValueError, match='no matching'):
         local_preparation(prepare, {k:v for k,v in keys.items() if k != provider}, 'ws://localhost:8000')
+
+
+def test_gemini_key_is_offered_to_router_with_its_registered_url(monkeypatch):
+    # The Router's /next accepts google only with exactly this url (its schema); anything else is a 422.
+    monkeypatch.setenv('TEST_GEMINI_KEY', 'gemini-secret')
+    cfg = config(llm_api_keys={'google': 'env:TEST_GEMINI_KEY'})
+    assert cfg.llm_api_keys == {'google': 'gemini-secret'}
+    assert cfg.llm_providers == ['google'] and cfg.llm_api_urls == ['https://generativelanguage.googleapis.com/v1beta']
+    cfg = config(llm_api_keys={'xai': 'xai-secret', 'google': 'gemini-secret'})
+    assert cfg.llm_providers == ['xai', 'google']
+    assert cfg.llm_api_urls == ['https://api.x.ai/v1', 'https://generativelanguage.googleapis.com/v1beta']
+    with pytest.raises(ValueError, match='google'):
+        config(llm_api_keys={'gemini': 'secret'})
 
 
 def test_claude_account_advertises_provider_without_sending_api_key():
