@@ -738,7 +738,7 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                             'action_recording': context.get('action_recording', 'policy_targets'),
                             'execution_enabled': context['execution_enabled'],
                             'institution': assignment.get('institution', config.institution),
-                            'country': assignment.get('country', ''),
+                            **({'country': assignment['country']} if assignment.get('country') else {}),
                             'scene': assignment.get('scene', config.scene),
                             'evaluator': assignment.get('evaluator', config.evaluator),
                             'outcome': local['outcomes'][run['side']],

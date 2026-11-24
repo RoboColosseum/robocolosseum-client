@@ -144,7 +144,8 @@ def test_record_only_defers_difficulty_until_review(manifest, monkeypatch):
 
 
 @pytest.mark.parametrize('rating', [None, 7])
-def test_resume_existing_exports_preserves_metadata_without_reprompt(manifest, monkeypatch, rating):
+@pytest.mark.parametrize('country', [None, '', 'CN'])
+def test_resume_existing_exports_preserves_metadata_without_reprompt(manifest, monkeypatch, rating, country):
     folder = manifest
     import numpy as np
     from colosseum_client.droid_robot import RobotObservation
@@ -152,6 +153,8 @@ def test_resume_existing_exports_preserves_metadata_without_reprompt(manifest, m
     document = json.loads((folder / 'manifest.json').read_text())
     assignment = document['assignment']
     assignment.update(state='pending', track='open')
+    if country is not None:
+        assignment['country'] = country
     assignment['task']['cameras'] = ['head_image']
     config = RobotClientConfig(url='ws://localhost', token='test', cameras={'head_image': 'test'},
                                instruction='pick', scene='desk', evaluation_dir=str(folder.parent),
@@ -177,6 +180,8 @@ def test_resume_existing_exports_preserves_metadata_without_reprompt(manifest, m
                     'scene': config.scene, 'evaluator': config.evaluator, 'outcome': outcome}
         if rating is not None:
             metadata.update(task_difficulty=rating, task_difficulty_scale=10)
+        if country:
+            metadata['country'] = country
         exported = export_trial(path, ['head_image'], fps=15, robot_type='franka', task='pick', metadata=metadata)
         marker = exported / 'meta/colosseum.json'
         before[marker] = marker.read_bytes()
