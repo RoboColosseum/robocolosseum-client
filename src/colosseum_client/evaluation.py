@@ -22,10 +22,11 @@ import threading
 import httpx
 import numpy as np
 
+from . import colosseum_pb2 as pb
 from .adapters import make_robot
-from .diagnostics import read_observation, execute_robot_action_async, close_resources
+from .diagnostics import read_observation, execute_robot_action_async, close_resources, ACTION_EXECUTION_SKIPPED
 from .client import ColosseumClient, ProtocolError
-from .recording import TrialRecorder
+from .recording import TrialRecorder, OptionalRecording
 from .task_annotations import difficulty, exported_difficulties, set_difficulty
 from .http_diagnostics import log_http_error
 from .navigation import ROVER_TYPE
@@ -106,8 +107,13 @@ class EvalAPI:
         else:
             raise RuntimeError('Unknown video storage mode')
 
+    from .dataset_guard import locked_upload
+
+    @locked_upload
     def upload_dataset(self, run_id, root):
         root = Path(root)
+        from .roboeval_export import validate_uploaded_extension
+        validate_uploaded_extension(root)
         files = []
         for path in sorted(root.rglob('*')):
             if path.is_file():
@@ -341,6 +347,19 @@ def rover_navigation(config):
     return {'timeout_s': int(settings.get('timeout_s', 300)), 'stopped_s': float(settings.get('stopped_s', 2))}
 
 
+def optional_event(path, assignment_id, run_id, kind, **details):
+    try:
+        from .roboeval_shared import record_event
+        return record_event(path, assignment_id, run_id, kind, **details)
+    except Exception as error:
+        print(f'RoboEval events incomplete: {error}. PK/result submission continues.', flush=True)
+        try:
+            save(path / 'shared-events-error.json', {'error': str(error),
+                'error_type': type(error).__name__, 'incomplete': True})
+        except Exception as report_error:
+            print(f'Cannot persist event error report: {report_error}', flush=True)
+
+
 async def run_trial(config, assignment, run, path, api, *, robot_factory=make_robot,
                     execute_action=True, confirm_live=None):
     # ZeroRPC/gevent connections must be created and used on the same OS thread.
@@ -352,7 +371,28 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
 
         task = assignment['task']
         recorder = None
+        roboeval = None
         robot = None
+        episode_ended = False
+        def event(kind, **details):
+            if getattr(config, 'roboeval_setup', ''):
+                return optional_event(path, assignment['id'], run['id'], kind, **details)
+        if getattr(config, 'roboeval_setup', ''):
+            from .roboeval_sdk import require_feedback_capabilities
+            require_feedback_capabilities(continuous=bool(config.roboeval_state_hz))
+            roboeval = OptionalRecording(path)
+            try:
+                if not execute_action:
+                    raise ValueError('Complete RoboEval recording requires action execution')
+                from .roboeval import RoboEvalRecorder
+                # Heavy model preparation still precedes robot construction.
+                roboeval.recorder = RoboEvalRecorder(path, config.roboeval_setup, hz=(getattr(config, 'roboeval_state_hz', 0) or config.control_hz),
+                    continuous=bool(getattr(config, 'roboeval_state_hz', 0)),
+                    identity=dict(assignment_id=assignment['id'], run_id=run['id'],
+                                  task=task, robot_type=config.robot_type))
+                roboeval.recorder.setup.validate_cameras(config.cameras)
+            except Exception as error:
+                roboeval.fail(error)
         local_mode = assignment.get('inference_mode', 'remote') == 'local'
         if local_mode:
             if not config.test and config.robot_type not in {'franka', 'yam', 'so101'}:
@@ -425,12 +465,20 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                 raise ProtocolError('Assigned policy does not support this robot action space')
             if local_mode:
                 save(path / 'policy.json', {'run_id': run['id'], 'model': client.model})
+            if roboeval is not None:
+                if robot.action_space_name != 'joint_position':
+                    roboeval.fail(ValueError('RoboEval is currently supported by the deployed YAM VLA joint policies'))
+                event('episode_start')
+                await asyncio.to_thread(roboeval.start, robot)
             if config.recording:
                 eef_control = robot.action_space_name == 'eef_abs_pose'
                 save(path / 'recording-context.json', {
                     'robot_type': config.robot_type, 'fps': trial_hz,
+                    'roboeval_state_hz': getattr(config, 'roboeval_state_hz', 0),
                     'action_space': 'joint_position' if eef_control else robot.action_space_name,
                     'execution_enabled': execute_action, 'test': config.test,
+                    'roboeval_required': roboeval is not None,
+                    'roboeval_shared_required': roboeval is not None,
                     'joint_step_mode': getattr(robot, 'joint_step_mode', None),
                     'native_control_mode': native_mode,
                     'action_recording': ('accepted_joint_commands_after_eef_ik'
@@ -440,7 +488,15 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                     'joint_max_step': config.adapter_config.get('joint_max_step')})
                 record_cameras = trial_cameras(config, task)
                 print(f"Recording cameras: {record_cameras} (Router task cameras: {task['cameras']})", flush=True)
-                recorder = TrialRecorder(path, record_cameras)
+                source_video = (bool(getattr(config, 'roboeval_state_hz', 0)) and roboeval is not None
+                                and roboeval.recorder is not None and roboeval.error is None)
+                recorder = TrialRecorder(path, record_cameras, **({'store_images': False} if source_video else {}))
+                if roboeval is not None:
+                    context_path = path / 'recording-context.json'
+                    context = json.loads(context_path.read_text())
+                    context['capture_clock_origin_monotonic_s'] = recorder.started
+                    roboeval.call(save, context_path, context)
+
             print('Trial started. Press Enter to finish, or Ctrl-C to interrupt.')
             print('Recording enabled: frames are written by a background worker.' if recorder is not None
                   else 'Recording disabled.', flush=True)
@@ -456,9 +512,11 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                 if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0)[0]:
                     sys.stdin.readline()
                     if step > 0:
+                        event('operator_finish_requested', control_step=step, source='client_stdin')
                         break
                 if INTERRUPT.is_set():
                     INTERRUPT.clear()
+                    event('software_stop_requested', control_step=step, source='client_interrupt')
                     print('Trial interrupted by the operator.', flush=True)
                     break
                 if deadline is not None and time.monotonic() >= deadline:
@@ -468,12 +526,38 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                 current = await robot_call(read_observation, robot, step, 'step_start')
                 captured_at = time.monotonic()
                 if actions is None or chunk_index >= len(actions):
-                    observation = protobuf_observation(
-                        current, instruction=task['instruction'], control_step=step,
-                        image_encoding='raw' if local_mode else config.image_encoding,
-                        jpeg_quality=config.jpeg_quality)
-                    plan = await client.infer(observation, deadline_ms=config.deadline_ms)
+                    encoding = config.image_encoding
+                    if encoding == 'png' and local_mode:
+                        # Native PNG compression releases the GIL; don't block the
+                        # asyncio stop/heartbeat handling during image preparation.
+                        observation = await asyncio.to_thread(protobuf_observation, current,
+                            instruction=task['instruction'], control_step=step, image_encoding=encoding)
+                    else:
+                        observation = protobuf_observation(current, instruction=task['instruction'], control_step=step, image_encoding='raw' if local_mode else config.image_encoding, jpeg_quality=config.jpeg_quality)
+                    request_at = time.monotonic()
+                    provenance = (roboeval.call(getattr(robot, 'roboeval_observation_timing', lambda: {}))
+                                  if roboeval is not None else {}) or {}
+                    call_id = f"{run['id']}:{step}"
+                    try:
+                        plan = await client.infer(observation, deadline_ms=config.deadline_ms)
+                    except BaseException as inference_error:
+                        event('inference', stamp=request_at, call_id=call_id,
+                            observation_monotonic_s=captured_at, observation_started_monotonic_s=started,
+                            action_ready_monotonic_s=None, observation_sources=provenance,
+                            status='cancelled' if isinstance(inference_error, asyncio.CancelledError) else 'error',
+                            error_type=type(inference_error).__name__, error=str(inference_error))
+                        raise
+                    ready_at = time.monotonic()
+
                     actions = action_chunk(plan, control_step=step, expected_dim=robot.action_dim)
+                    if roboeval is not None:
+                        event('inference', stamp=request_at, call_id=call_id, plan_id=plan.plan_id,
+                            request_sequence=plan.request_sequence, start_step=plan.start_step,
+                            observation_monotonic_s=captured_at, observation_started_monotonic_s=started,
+                            action_ready_monotonic_s=ready_at, observation_sources=provenance,
+                            executable_prefix_length=len(actions), status='ready')
+                        roboeval.plan(plan, action_space=robot.action_space_name,
+                                      executable_length=len(actions))
                     plan_done = bool(getattr(plan, 'done', False))
                     chunk_index = 0
                     begin_chunk = getattr(robot, 'begin_chunk', None)
@@ -481,10 +565,16 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                         await robot_call(begin_chunk)
                     print(f'Received action chunk at step {step}: {len(actions)} actions (execution {"enabled" if execute_action else "skipped"}).', flush=True)
                 action = actions[chunk_index]
+                if roboeval is not None:
+                    roboeval.select(plan.plan_id, chunk_index, step)
                 eef_mode = local_mode and native_mode == 'eef_delta_pose'
                 if local_mode:
                     await client.before_action(step)
                 sent = await execute_robot_action_async(robot, action, step, robot_call, execute_action)
+                if sent is ACTION_EXECUTION_SKIPPED:
+                    event('operator_finish_requested', control_step=step, source='ui_stop_before_execution')
+                    break
+                executed_at = time.monotonic() if execute_action else None
                 if eef_mode:
                     # SO101 EEF: record the joint command the driver accepted after IK.
                     accepted = np.asarray(sent, dtype=np.float32)
@@ -502,7 +592,11 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                             raise RuntimeError('YAM EE step returned no sent joint command')
                         recorder.add(current, sent, captured_at=captured_at, policy_action=action)
                     else:
-                        recorder.add(current, action, captured_at=captured_at)
+                        if getattr(config, 'roboeval_state_hz', 0):
+                            recorder.add(current, action, captured_at=captured_at,
+                                         action_executed_monotonic_s=executed_at)
+                        else:
+                            recorder.add(current, action, captured_at=captured_at)
                 chunk_index += 1
                 step += 1
                 if plan_done:
@@ -510,17 +604,35 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                     break
                 # Include observation, inference and execution in the control period.
                 await asyncio.sleep(max(0, 1/trial_hz - (time.monotonic() - started)))
+            if roboeval is not None and local_mode and hasattr(client, 'drain_recording'):
+                try:
+                    terminal = await client.drain_recording()
+                    if terminal is not None:
+                        roboeval.plan(pb.ActionPlan(plan_id=step + (1 << 63), start_step=step,
+                            action_evidence_json=json.dumps(terminal).encode()),
+                            action_space=robot.action_space_name, executable_length=0)
+                except Exception as error:
+                    roboeval.fail(error)
+            if getattr(config, 'roboeval_state_hz', 0) and roboeval is not None:
+                context['continuous_end_monotonic_s'] = time.monotonic()
+                roboeval.call(save, context_path, context)
+            event('episode_end', control_steps=step)
+            episode_ended = True
             if recorder is not None:
                 final_observation = await robot_call(robot.get_observation)
                 recorder.add(final_observation)
                 print('Finishing recording...', flush=True)
                 await asyncio.to_thread(recorder.close)
+            if roboeval is not None:
+                await asyncio.to_thread(roboeval.close, complete=True)
             # Synthetic trials and observation-only runs never home.
             finish_robot = getattr(robot, 'finish_trial', None)
             if execute_action and not config.test and finish_robot is not None:
                 return_attempted = True
+                event('reset_start', reset_kind='robot_return')
                 await finish_robot(robot_call)
                 return_confirmed = True
+                event('reset_end', reset_kind='robot_return', status='confirmed')
             if local_mode:
                 await client.finish()
             else:
@@ -567,12 +679,124 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                               f'{recovery_error}', flush=True)
             raise
         finally:
+            robot_cleanup_succeeded = False
+            async def close_trial_robot():
+                nonlocal robot_cleanup_succeeded
+                await robot_call(robot.close)
+                robot_cleanup_succeeded = True
             resources = [('Client', client.close)]
+            if not episode_ended:
+                event('episode_end', control_steps=step, status='interrupted')
+            if roboeval is not None:
+                resources.append(('RoboEval', partial(asyncio.to_thread, roboeval.close)))
             if robot is not None:
-                resources.append(('Robot', partial(robot_call, robot.close)))
+                resources.append(('Robot', close_trial_robot))
             if recorder is not None:
                 resources.append(('Recorder', partial(asyncio.to_thread, recorder.close)))
             await close_resources(resources)
+            # Reading full streams and certifying the training grid can hold the
+            # GIL. Do it only after robot.close completed, never before homing.
+            if getattr(config, 'roboeval_state_hz', 0) and episode_ended and robot_cleanup_succeeded:
+                from .continuity_quality import assess_run
+                await asyncio.to_thread(assess_run, path)
+
+
+def export_recorded_run(config, assignment, run, folder, track, outcome, annotation=None):
+    from .lerobot_export import export_trial
+    run_path = folder / run['id']
+    context_path = run_path / 'recording-context.json'
+    if not context_path.exists():
+        raise ValueError('This older recording lacks the context required for LeRobot export')
+    context = json.loads(context_path.read_text())
+    metadata = {'assignment_id': assignment['id'], 'run_id': run['id'],
+        'side': run['side'], 'track': track, 'test': context['test'],
+        'action_space': context['action_space'], 'execution_enabled': context['execution_enabled'],
+        'native_control_mode': context.get('native_control_mode', 'joint_pos'),
+        'action_recording': context.get('action_recording', 'policy_targets'),
+        **({'goal': assignment['task']['goal']} if assignment['task'].get('goal') else {}),
+        'institution': assignment.get('institution', config.institution),
+        **({'country': assignment['country']} if assignment.get('country') else {}),
+        'scene': assignment.get('scene', config.scene),
+        'evaluator': assignment.get('evaluator', config.evaluator), 'outcome': outcome}
+    manifest = json.loads((Path(folder) / 'manifest.json').read_text(encoding='utf-8'))
+    if manifest.get('task_difficulty') is not None:
+        metadata.update(task_difficulty=manifest['task_difficulty'], task_difficulty_scale=10)
+    if annotation is not None:
+        metadata['roboeval_outcome'] = annotation
+    cameras = trial_cameras(config, assignment['task'])
+    if context.get('roboeval_state_hz'):
+        # Preserve legacy exports when upgrading a previously recorded run.
+        output = run_path
+        marker = run_path / 'lerobot/meta/colosseum.json'
+        if marker.exists():
+            saved = json.loads(marker.read_text())
+            if saved.get('delivery_profile') != 'yam-30hz-physical-v1':
+                output = run_path / 'export_physical_30hz'
+        dataset = export_trial(run_path, cameras, fps=30,
+            robot_type=context['robot_type'], task=assignment['task']['instruction'],
+            metadata=metadata, continuous_training_fps=30,
+            export_destination=output / 'lerobot', omit_auxiliary_columns=True, training_delivery=True)
+    else:
+        dataset = export_trial(run_path, cameras, fps=context['fps'],
+            robot_type=context['robot_type'], task=assignment['task']['instruction'], metadata=metadata)
+    print(f'LeRobot dataset saved: {dataset}', flush=True)
+    return dataset
+
+
+def build_recorded_comparison(assignment, result, folder):
+    """Resolve A/B model identity from each run's recorded policy receipt."""
+    from .roboeval_feedback import build_comparison
+    recorded_runs = []
+    for run in assignment['runs']:
+        recorded = dict(run)
+        policy_path = Path(folder) / run['id'] / 'policy.json'
+        if policy_path.is_file():
+            policy = json.loads(policy_path.read_text())
+            if (not isinstance(policy, dict) or policy.get('run_id') != run['id']
+                    or not isinstance(policy.get('model'), dict) or not policy['model']):
+                raise ValueError('Recorded policy identity is invalid for run ' + run['id'])
+            recorded['model'] = policy['model']
+        recorded_runs.append(recorded)
+    return build_comparison({**assignment, 'runs': recorded_runs}, result)
+
+
+def export_expanded_run(config, assignment, run, folder, result):
+    """Used both at original confirmation and by the existing backfill command."""
+    from .roboeval_feedback import outcome_for_run, single_run_outcome
+    track = assignment['track']
+    manifest_path = Path(folder) / 'manifest.json'
+    document = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
+    if 'b6' in document:
+        result = {**result, 'b6': document['b6']}
+    annotation = (outcome_for_run(build_recorded_comparison(assignment, result, folder), run['id']) if track == 'open'
+                  else single_run_outcome(assignment, result, run['id']))
+    return export_recorded_run(config, assignment, run, folder, track,
+                               result['outcomes'][run['side']], annotation)
+
+
+def expanded_recording(folder, assignment):
+    """Use capture-time requirements even if the active config was changed later."""
+    for run in assignment['runs']:
+        context = Path(folder) / run['id'] / 'recording-context.json'
+        if context.exists() and json.loads(context.read_text(encoding='utf-8')).get('roboeval_required'):
+            return True
+    return False
+
+
+def finalize_recorded_datasets(config, assignment, folder, local):
+    """Best effort after result confirmation; never changes the submitted result."""
+    if not (getattr(config, 'roboeval_setup', '') or expanded_recording(folder, assignment)):
+        return
+    for run in assignment['runs']:
+        try:
+            export_expanded_run(config, assignment, run, folder, local['result'])
+        except Exception as error:
+            status = dict(complete=False, error_type=type(error).__name__, error=str(error))
+            print(f"RoboEval dataset incomplete for {run['side']}: {error}. Result remains submitted.", flush=True)
+        else:
+            status = dict(complete=True)
+        local.setdefault('dataset_exports', {})[run['id']] = status
+        save(Path(folder) / 'manifest.json', local)
 
 
 def select_task(api, robot, test=False):
@@ -669,6 +893,8 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
             task = assignment['task']
             print(f"\nTask: {task['instruction']}")
             if assignment['state'] == 'completed':
+                if config.recording and local.get('result'):
+                    finalize_recorded_datasets(config, assignment, folder, local)
                 print('Already submitted.'); return
             if assignment['state'] != 'pending':
                 raise RuntimeError('This assignment is closed')
@@ -725,27 +951,8 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                         value = prompt_task_difficulty()
                     set_difficulty(folder, local, value)
                     save(manifest, local)
-                    context_path = run_path / 'recording-context.json'
-                    if not context_path.exists():
-                        raise ValueError('This older recording lacks the context required for LeRobot export')
-                    context = json.loads(context_path.read_text())
-                    dataset = export_trial(run_path, trial_cameras(config, task), fps=context['fps'],
-                        robot_type=context['robot_type'], task=task['instruction'],
-                        metadata={'assignment_id': assignment['id'], 'run_id': run['id'],
-                            'side': run['side'], 'track': track, 'test': context['test'],
-                            'action_space': context['action_space'],
-                            'native_control_mode': context.get('native_control_mode', 'joint_pos'),
-                            'action_recording': context.get('action_recording', 'policy_targets'),
-                            'execution_enabled': context['execution_enabled'],
-                            'institution': assignment.get('institution', config.institution),
-                            **({'country': assignment['country']} if assignment.get('country') else {}),
-                            'scene': assignment.get('scene', config.scene),
-                            'evaluator': assignment.get('evaluator', config.evaluator),
-                            'outcome': local['outcomes'][run['side']],
-                            **({'task_difficulty': local['task_difficulty'], 'task_difficulty_scale': 10}
-                               if local.get('task_difficulty') is not None else {}),
-                            **({'goal': task['goal']} if task.get('goal') else {})})
-                    print(f'LeRobot dataset saved: {dataset}', flush=True)
+                    if not (getattr(config, 'roboeval_setup', '') or expanded_recording(folder, assignment)):
+                        export_recorded_run(config, assignment, run, folder, track, local['outcomes'][run['side']])
             if 'result' not in local:
                 preference = None
                 if track == 'open':
@@ -755,9 +962,14 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
                 local['result'] = {'outcomes': local['outcomes'], 'preference': preference,
                     'feedback': ask('Feedback (optional): ').strip() if track == 'open' else ''}
                 save(manifest, local)
+            if 'b6' in local:
+                from .roboeval_b6 import validate_b6
+                validate_b6(assignment, local['b6'], required=True)
             api.request('POST', f"/assignments/{assignment['id']}/result", local['result'])
             local['submitted'] = True; save(manifest, local)
             print('Evaluation result submitted.', flush=True)
+            if config.recording:
+                finalize_recorded_datasets(config, assignment, folder, local)
             if config.recording and config.skip_upload:
                 print('Dataset upload skipped. Recordings remain local. '
                       f'Upload later with colosseum-upload-dataset <config> --evaluation-id {assignment["id"]}', flush=True)
@@ -766,7 +978,10 @@ def run_evaluation(config, *, track=None, resume=None, abort=None, execute_actio
             for run in assignment['runs']:
                 run_path = folder / run['id']
                 if config.recording and not config.skip_upload:
-                    dataset = run_path / 'lerobot'
+                    if (getattr(config, 'roboeval_setup', '') or expanded_recording(folder, assignment)) and not local.get('dataset_exports', {}).get(run['id'], {}).get('complete'):
+                        continue
+                    from .dataset_paths import exported_dataset
+                    dataset = exported_dataset(run_path, local.get('dataset_exports', {}).get(run['id']))
                     # The server checks each object on retry; local flags alone do not prove durability.
                     try:
                         api.upload_dataset(run['id'], dataset)

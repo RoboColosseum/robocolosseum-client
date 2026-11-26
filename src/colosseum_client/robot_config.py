@@ -33,6 +33,8 @@ class RobotClientConfig:
     api_url: str = ""
     evaluation_dir: str = "eval_runs"
     recording: bool = True
+    roboeval_setup: str = ''
+    roboeval_state_hz: int = 0  # 0: legacy; 100: continuous joint recording + 640x480 at 30 FPS
     skip_upload: bool = False
     dataset_url: str = ""
     dataset_token: str = field(default="", repr=False)
@@ -61,6 +63,8 @@ class RobotClientConfig:
         return [API_URLS[name] for name in self.llm_providers]
 
     def __post_init__(self) -> None:
+        if self.image_encoding == 'png' and not self.policy_server_url:
+            raise ValueError('PNG policy images require a compatible local policy_server_url')
         from .llm_credentials import resolve_keys, require_secure_policy_url
         keys = resolve_keys(self.llm_api_keys)
         if (not isinstance(self.llm_account_logins, Mapping)
@@ -123,7 +127,7 @@ class RobotClientConfig:
         allowed = {
             "policy_ping_interval", "policy_ping_timeout",
             "institution", "country", "test", "use_local_action_contract", "scene", "evaluator", "track", "policy_server_url", "prepare_timeout",
-            "robot_type", "adapter", "adapter_config", "api_url", "evaluation_dir", "recording", "skip_upload", "max_trial_steps",
+            "robot_type", "adapter", "adapter_config", "api_url", "evaluation_dir", "recording", "roboeval_setup", "roboeval_state_hz", "skip_upload", "max_trial_steps",
             "url", "dataset_url", "dataset_token", "dataset_token_file",
             "token", "llm_api_keys", "llm_account_logins", "llm_control_mode",
             "cameras",
@@ -188,6 +192,10 @@ class RobotClientConfig:
             api_url=value.get("api_url", ""),
             evaluation_dir=value.get("evaluation_dir", "eval_runs"),
             recording=value.get("recording", True),
+            roboeval_setup=(str((Path(path).resolve().parent / value["roboeval_setup"]).resolve())
+                if isinstance(value.get("roboeval_setup"), str) and value["roboeval_setup"]
+                else value.get("roboeval_setup", "")),
+            roboeval_state_hz=value.get("roboeval_state_hz", 0),
             skip_upload=value.get("skip_upload", False),
             dataset_url=value.get("dataset_url", ""),
             dataset_token=value.get("dataset_token", ""),
@@ -203,6 +211,14 @@ class RobotClientConfig:
             image_encoding=value.get("image_encoding", "raw"),
             jpeg_quality=value.get("jpeg_quality", 85),
         )
+        if not isinstance(config.roboeval_setup, str):
+            raise ValueError("roboeval_setup must be a path or empty string")
+        if config.roboeval_setup and (config.robot_type != "yam" or not config.recording or config.test):
+            raise ValueError("roboeval_setup requires real YAM recording")
+        if type(config.roboeval_state_hz) is not int or config.roboeval_state_hz not in (0, 100):
+            raise ValueError('roboeval_state_hz must be 0 (legacy) or 100 (continuous)')
+        if config.roboeval_state_hz and not config.roboeval_setup:
+            raise ValueError('Continuous recording requires roboeval_setup')
         if type(config.recording) is not bool:
             raise ValueError("recording must be true or false")
         if type(config.skip_upload) is not bool:
@@ -217,8 +233,8 @@ class RobotClientConfig:
         )
         if any(not isinstance(number, int) or isinstance(number, bool) or number <= 0 for number in numbers):
             raise ValueError("control_hz, deadline_ms, image_width, and image_height must be positive")
-        if config.image_encoding not in {"raw", "jpeg"}:
-            raise ValueError("image_encoding must be raw or jpeg")
+        if config.image_encoding not in {"raw", "jpeg", "png"}:
+            raise ValueError("image_encoding must be raw or jpeg or png")
         if type(config.jpeg_quality) is not int or not 1 <= config.jpeg_quality <= 100:
             raise ValueError("jpeg_quality must be an integer in [1, 100]")
         if not isinstance(config.instruction, str):

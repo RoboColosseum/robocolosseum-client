@@ -5,6 +5,21 @@ import pytest
 from colosseum_client import RobotClientConfig
 
 
+@pytest.mark.parametrize('encoding', ['raw', 'jpeg', 'png'])
+def test_existing_image_encoding_supports_paired_png(tmp_path, encoding):
+    path = tmp_path / 'robot.yaml'
+    path.write_text('url: ws://localhost\ntoken: test\ncameras: {head_image: "123"}\n'
+                    f'policy_server_url: ws://localhost:8000\nimage_encoding: {encoding}\n')
+    assert RobotClientConfig.from_yaml(path).image_encoding == encoding
+
+
+def test_png_requires_paired_local_server(tmp_path):
+    path = tmp_path / 'robot.yaml'
+    path.write_text('url: ws://localhost\ntoken: test\ncameras: {head_image: "123"}\nimage_encoding: png\n')
+    with pytest.raises(ValueError, match='local policy_server_url'):
+        RobotClientConfig.from_yaml(path)
+
+
 def test_robot_config_loads_wss_and_camera_ids(tmp_path):
     path = tmp_path / "robot.yaml"
     path.write_text(

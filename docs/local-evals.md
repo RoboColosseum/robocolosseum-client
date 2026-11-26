@@ -1,5 +1,8 @@
 # YAM evaluations with local VLAs: record A/B, review, then submit
 
+For opt-in continuous data capture and the physical 30 Hz training export, see
+[R16 data installation](r16-dataset-install.md) and [low-level changes and validation](r16-dataset-changes.md).
+
 The five VLAs (G05, GR00T, MolmoAct2, LingBot, pi05) run as local checkpoints
 on this machine's GPU. The LLM policies (GPT, Grok, Claude Opus, Claude Fable
 and Gemini) run through their APIs and the local Policy Server, using Inspect

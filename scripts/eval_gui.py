@@ -768,15 +768,12 @@ def install_hooks():
     execute = ev.execute_robot_action_async
 
     async def execute_unless_stopped(robot, action, step, robot_call, enabled=True):
-        """After Stop, hold the measured pose instead of sending the policy's action, even if an
-        inference was already in flight; the loop then ends at its next step check."""
+        """Skip policy execution after Stop and tell the loop not to record a sent action."""
         if not PROMPTS.finish_now.is_set():
             return await execute(robot, action, step, robot_call, enabled)
         obs = S.last_obs
         if not so101():
-            hold = np.r_[obs.joints[:6], obs.gripper[:1], obs.joints[6:], obs.gripper[1:]].astype(np.float32)
-            S.held = (action, hold)
-            return hold
+            return ev.ACTION_EXECUTION_SKIPPED
         if getattr(robot, 'eef', None) is not None:
             # SO101 EEF must report the joint command it accepted: finish this one step as planned.
             return await execute(robot, action, step, robot_call, enabled)
@@ -899,6 +896,7 @@ def eval_detail(eid):
             'task_difficulty': d.get('task_difficulty'),
             'task_difficulty_locked': bool(rv.exported_difficulties(rv.ROOT / eid, d)),
             'runs': [{'id': r['id'], 'side': r['side'], 'recorded': r['recorded'],
+                      'b6': d.get('b6', {}).get(r['id'], {}),
                       'cams': [c for c in CAMS if (r['path'] / c).is_dir()],
                       'stop': operator_stop(r['path']), 'notes': notes.get(r['side'], ''),
                       'score': None if outcomes.get(r['side'], {}).get('partial_success') is None
@@ -1092,7 +1090,8 @@ def act_eval(eid: str, body: dict):
     if 'task_difficulty' in body:
         form['task_difficulty'] = [body['task_difficulty']]
     try:
-        rv.save(eid, form, require_difficulty=action == 'submit')
+        rv.save(eid, form, require_difficulty=action == 'submit', b6=body.get('b6'),
+                require_b6=action == 'submit' and rv.requires_b6(eid))
     except ValueError as e:
         raise HTTPException(400, f'Not saved: {e}')
     if action == 'submit':

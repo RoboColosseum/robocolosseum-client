@@ -4,6 +4,11 @@ import logging
 import sys
 
 
+# GUI stop guards return this only when the execution call was skipped.
+# None remains a valid result from legacy robot execute methods.
+ACTION_EXECUTION_SKIPPED = object()
+
+
 async def close_resources(resources):
     """Attempt every cleanup; preserve a pending error or raise the first close error."""
     original = sys.exc_info()[1]
