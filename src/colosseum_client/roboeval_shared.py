@@ -91,7 +91,7 @@ def shared_payload(run_path, outcome):
         raise ValueError('Ambiguous episode boundaries')
     clock = dict(schema_version=1, clock='python.time.monotonic', unit='seconds',
         host_boot_id=next(iter(clocks)),
-        scope='196 client and Web host; absolute values cannot be compared across hosts or host reboots',
+        scope='recording client host; absolute values cannot be compared across hosts or host reboots',
         episode_start_monotonic_s=starts[0], episode_end_monotonic_s=ends[0],
         stream_timestamps='states/actions/frames/shared use this host monotonic clock; source camera clocks are separate',
         camera_time_semantics='received_monotonic_s is host receipt, not exposure; source timestamp/domain/frame number retained',
