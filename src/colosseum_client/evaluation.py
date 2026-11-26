@@ -381,6 +381,9 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
             from .roboeval_sdk import require_feedback_capabilities
             require_feedback_capabilities(continuous=bool(config.roboeval_state_hz))
             roboeval = OptionalRecording(path)
+        def prepare_recording():
+            if roboeval is None:
+                return
             try:
                 if not execute_action:
                     raise ValueError('Complete RoboEval recording requires action execution')
@@ -408,6 +411,7 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
                 action_spaces=action_spaces,
             )
         else:
+            prepare_recording()
             robot = await robot_call(robot_factory, config)
             if config.test:
                 # Remote deployments carry no model spec; give the synthetic robot its real contract.
@@ -434,6 +438,9 @@ async def run_trial(config, assignment, run, path, api, *, robot_factory=make_ro
             if type(trial_hz) is not int or trial_hz <= 0:
                 raise ProtocolError('Assigned control_hz must be a positive integer')
             if local_mode:
+                # Loading/confirmation may fail: do not leave a recording directory
+                # behind until they succeed. Heavy setup still precedes motor power.
+                prepare_recording()
                 mode = native_mode
                 if mode == 'eef_delta_pose' and not execute_action:
                     raise ValueError('SO101 EEF recording requires action execution to capture accepted joint commands')

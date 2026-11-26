@@ -292,7 +292,8 @@ def test_video_segment_indices_follow_source_frames(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('missing_raw', [False, True])
-async def test_trial_lifecycle_prepares_before_robot_and_closes_before_home(tmp_path, monkeypatch, missing_raw):
+@pytest.mark.parametrize('retry_start', [False, True])
+async def test_trial_lifecycle_prepares_before_robot_and_closes_before_home(tmp_path, monkeypatch, missing_raw, retry_start):
     import asyncio
     import sys
     from colosseum_client import evaluation, local_policy, roboeval
@@ -330,13 +331,16 @@ async def test_trial_lifecycle_prepares_before_robot_and_closes_before_home(tmp_
             self.closed = True
             super().close()
     def factory(*args, **kwargs):
-        assert events == ['prepared', 'connected']
+        assert events == ['connected', 'prepared']
         events.append('robot_constructed')
         return Robot()
     class Client:
         model = dict(action_space='joint_position', url='fake', revision='test')
         def __init__(self, *args, **kwargs): pass
         async def connect(self, **kwargs):
+            if retry_start and not events:
+                events.append('load_failed')
+                raise RuntimeError('model startup failed')
             events.append('connected')
             return SimpleNamespace(action_spaces=['joint_position'])
         async def infer(self, observation, **kwargs):
@@ -353,6 +357,14 @@ async def test_trial_lifecycle_prepares_before_robot_and_closes_before_home(tmp_
     monkeypatch.setattr(local_policy, 'LocalPolicyClient', Client)
     assignment = dict(id='fake-assignment', inference_mode='local',
         task=dict(instruction='offline test', max_steps=1, cameras=['left_image', 'right_image']))
+    if retry_start:
+        with pytest.raises(RuntimeError, match='model startup failed'):
+            await evaluation.run_trial(config, assignment, dict(id='fake-run'), tmp_path / 'run',
+                SimpleNamespace(), robot_factory=factory, confirm_live=lambda *args: True)
+        assert not (tmp_path / 'run/roboeval').exists()
+        assert 'prepared' not in events and 'robot_constructed' not in events
+        retry_start = False
+        events.clear()
     call = evaluation.run_trial(config, assignment, dict(id='fake-run'), tmp_path / 'run',
         SimpleNamespace(), robot_factory=factory, confirm_live=lambda *args: True)
     await call
