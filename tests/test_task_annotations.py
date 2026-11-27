@@ -212,3 +212,16 @@ def test_resume_existing_exports_preserves_metadata_without_reprompt(manifest, m
     assert submitted == [document['result']]
     assert all(marker.read_bytes() == raw for marker, raw in before.items())
     assert json.loads((folder / 'manifest.json').read_text()).get('task_difficulty') == rating
+
+
+@pytest.mark.parametrize('export_dir', ['export_30hz', 'export_clean_30hz', 'export_physical_30hz'])
+def test_versioned_exports_lock_difficulty(tmp_path, export_dir):
+    folder = tmp_path / 'ev'
+    marker = folder / 'run_A' / export_dir / 'lerobot/meta/colosseum.json'
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({'task_difficulty': 7}))
+    doc = {'assignment': {'runs': [{'id': 'run_A'}]}}
+    with pytest.raises(ValueError, match='cannot change'):
+        set_difficulty(folder, doc, 3)
+    set_difficulty(folder, doc, 7)
+    assert doc['task_difficulty'] == 7

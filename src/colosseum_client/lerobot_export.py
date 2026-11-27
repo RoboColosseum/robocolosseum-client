@@ -13,6 +13,7 @@ from PIL import Image
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from .roboeval_export import source_extension, stage_extension, validate_uploaded_extension, digest as file_digest
 from .navigation import ACTION_NAMES, GOAL_GPS_KEY, NAV_STATE_KEY, NAV_STATE_NAMES, ROVER_TYPE
 
 
@@ -42,8 +43,13 @@ def _clear_source_images(path, cameras, rows):
             (path / camera / f"{row['frame']:06d}.png").unlink(missing_ok=True)
 
 
+from .dataset_guard import locked_export
+
+
+@locked_export
 def export_trial(path: Path, cameras: list[str], *, fps: int, robot_type: str,
-                 task: str, metadata: dict) -> Path:
+                 task: str, metadata: dict, continuous_training_fps: int = 100,
+                 export_destination: Path | None = None, omit_auxiliary_columns: bool = False, training_delivery: bool = False) -> Path:
     """Write atomically; retries reuse only a matching, complete export.
 
     Dataset timestamps index control steps at nominal FPS. The original irregular
@@ -68,6 +74,17 @@ def export_trial(path: Path, cameras: list[str], *, fps: int, robot_type: str,
         raise ValueError("Expected action frames followed by at most one final observation")
     if [row["frame"] for row in all_rows] != list(range(len(all_rows))):
         raise ValueError("Recording frame indices are not contiguous")
+    recording_context = path / 'recording-context.json'
+    recording = json.loads(recording_context.read_text()) if recording_context.exists() else {}
+    continuous = None
+    if status.get('image_storage') == 'continuous_source' and not recording.get('roboeval_state_hz'):
+        raise ValueError('Source-video recording requires continuous export; PNG fallback is unavailable')
+    if recording.get('roboeval_state_hz'):
+        from .continuous_recording import build_continuous
+        if robot_type != 'yam' or metadata.get('action_space') != 'joint_position':
+            raise ValueError('Continuous export currently requires YAM joint policy targets')
+        continuous = build_continuous(path, rows, recording, cameras, training_fps=continuous_training_fps)
+        rows, fps = continuous['rows'], continuous_training_fps
     for row in rows:
         for key in ("joints", "gripper", "action"):
             value = np.asarray(row.get(key), dtype=np.float32)
@@ -84,6 +101,18 @@ def export_trial(path: Path, cameras: list[str], *, fps: int, robot_type: str,
         "observation.state": [row["joints"] + row["gripper"] for row in rows],
         "action": [row["action"] for row in rows],
     }
+    if training_delivery:
+        if continuous is None or fps != 30 or not omit_auxiliary_columns:
+            raise ValueError('Training delivery requires continuous clean 30 Hz data')
+        from .training_delivery import physical_vectors
+        raw_meta = path / 'roboeval/meta/roboeval'
+        vectors.update(physical_vectors(rows, pq.read_table(raw_meta/'states.parquet').to_pylist(),
+                                        pq.read_table(raw_meta/'actions.parquet').to_pylist()))
+    efforts = [row.get('gripper_effort_nm') for row in rows]
+    if any(value is not None for value in efforts):
+        if any(value is None for value in efforts) or not np.isfinite(efforts).all():
+            raise ValueError('Incomplete or invalid gripper effort recording')
+        vectors['observation.gripper_effort_nm'] = efforts
     if cartesian[0].size:
         vectors["observation.cartesian_position"] = cartesian
     policy_actions = [row.get('policy_action') for row in rows]
@@ -129,10 +158,34 @@ def export_trial(path: Path, cameras: list[str], *, fps: int, robot_type: str,
                "action_semantics": ("driver-accepted joint command after EEF IK"
                                     if metadata.get("action_recording") == "accepted_joint_commands_after_eef_ik"
                                     else "selected command; not measured execution")}
+    if training_delivery:
+        from .training_delivery import PROFILE
+        context['delivery_profile'] = PROFILE
+    if omit_auxiliary_columns:
+        if continuous is None:
+            raise ValueError('Clean training columns require continuous source evidence')
+        context['training_auxiliary_columns'] = 'omitted'
+    if 'observation.gripper_effort_nm' in vectors:
+        context['gripper_effort'] = dict(unit='N.m', order=['left', 'right'],
+            source='signed motor 7 torque feedback', is_fingertip_force=False)
+    if continuous is not None:
+        context.update(continuous_recording=continuous['metadata'],
+                       timestamp_semantics=f'{fps} Hz real elapsed grid after first successful action',
+                       capture_timestamp_semantics='grid seconds; actual source samples retained separately')
+    recording_context = path / 'recording-context.json'
+    shared_required = (recording_context.exists() and
+        json.loads(recording_context.read_text()).get('roboeval_shared_required') is True)
+    shared = None
+    if shared_required or metadata.get('roboeval_outcome') is not None:
+        if metadata.get('roboeval_outcome') is None:
+            raise ValueError('Confirmed comparison feedback is required before final export')
+        from .roboeval_shared import shared_payload
+        shared = shared_payload(path, metadata['roboeval_outcome'])
+        context['roboeval_shared_source_sha256'] = shared['signature']
     if robot_type == "yam":
         context["state_action_order"] = "left_joint_1..6,left_gripper,right_joint_1..6,right_gripper"
         context["state_action_units"] = "radians; grippers normalized 0 closed, 1 open"
-        context["cartesian_state_available"] = bool(cartesian[0].size)
+        context["cartesian_state_available"] = training_delivery or bool(cartesian[0].size)
     if robot_type == "so101":
         context["state_action_order"] = ",".join(SO101_NAMES)
         context["state_action_units"] = "degrees; gripper opening 0 closed, 100 open"
@@ -142,8 +195,15 @@ def export_trial(path: Path, cameras: list[str], *, fps: int, robot_type: str,
         context["state_action_units"] = ("degrees (latitude, longitude, heading), m/s, percent, rpm; "
                                          "actions normalized [-1, 1], +angular turns left")
         context["cartesian_state_available"] = False
+    extension = source_extension(path)
+    if extension is not None:
+        for key in ('assignment_id', 'run_id', 'policy'):
+            if key in context and extension['identity'].get(key) != context[key]:
+                raise ValueError('RoboEval source identity differs from this recording/context')
+        context['roboeval_source_sha256'] = extension['signature']
     signature = hashlib.sha256(raw + json.dumps(context, sort_keys=True).encode()).hexdigest()
-    destination = path / "lerobot"
+    destination = Path(export_destination) if export_destination is not None else path / "lerobot"
+    destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         marker = json.loads((destination / "meta/colosseum.json").read_text())
         if marker.get("source_sha256") != signature:
@@ -151,9 +211,12 @@ def export_trial(path: Path, cameras: list[str], *, fps: int, robot_type: str,
         for relative, digest in marker["files"].items():
             if hashlib.sha256((destination / relative).read_bytes()).hexdigest() != digest:
                 raise ValueError("Existing LeRobot export is incomplete or modified")
-        _clear_source_images(path, cameras, all_rows)
+        validate_uploaded_extension(destination)
+        if export_destination is None:
+            _clear_source_images(path, cameras, all_rows)
         return destination
-    staging = Path(tempfile.mkdtemp(prefix=".lerobot-", dir=path))
+    staging = Path(tempfile.mkdtemp(prefix=".lerobot-", dir=destination.parent))
+    compact_staging = None
     try:
         count = len(rows)
         features = {}
@@ -175,6 +238,12 @@ def export_trial(path: Path, cameras: list[str], *, fps: int, robot_type: str,
             if robot_type == ROVER_TYPE:
                 names = {"observation.state": list(NAV_STATE_NAMES), "action": list(ACTION_NAMES),
                          "observation.goal_gps": ["goal_latitude", "goal_longitude"]}.get(key, names)
+            if key == 'observation.gripper_effort_nm':
+                names = ['left_gripper', 'right_gripper']
+            if training_delivery:
+                from .training_delivery import SIGNALS, COMMANDS, names as physical_names
+                if key in SIGNALS or key in COMMANDS:
+                    names = physical_names(key)
             features[key] = {"dtype": str(array.dtype), "shape": [array.shape[1]], "names": names}
             columns[key] = pa.array(array.tolist(), type=pa.list_(pa.from_numpy_dtype(array.dtype), array.shape[1]))
             stats[key] = _stats(array)
@@ -184,6 +253,16 @@ def export_trial(path: Path, cameras: list[str], *, fps: int, robot_type: str,
                    "index": np.arange(count, dtype=np.int64),
                    "task_index": np.zeros(count, dtype=np.int64),
                    "observation.capture_timestamp": capture}
+        if all('captured_monotonic_s' in row for row in rows):
+            stamps = np.asarray([row['captured_monotonic_s'] for row in rows], dtype=np.float64)
+            if not np.isfinite(stamps).all() or np.any(np.diff(stamps) <= 0):
+                raise ValueError('Invalid shared observation timestamps')
+            scalars['observation.capture_monotonic_s'] = stamps
+        if continuous is not None:
+            scalars.update(continuous['columns'])
+        if omit_auxiliary_columns:
+            scalars = {k: v for k, v in scalars.items()
+                       if not k.startswith(('observation.capture_', 'observation.source_', 'action_source_'))}
         for key, values in scalars.items():
             features[key] = {"dtype": str(values.dtype), "shape": [1], "names": None}
             columns[key] = pa.array(values)
@@ -208,8 +287,26 @@ def export_trial(path: Path, cameras: list[str], *, fps: int, robot_type: str,
                    "dataset_from_index": 0, "dataset_to_index": count,
                    "data/chunk_index": 0, "data/file_index": 0,
                    "meta/episodes/chunk_index": 0, "meta/episodes/file_index": 0}
+        if shared is not None:
+            from .roboeval_shared import episode_annotation
+            episode.update(episode_annotation(shared['outcome']))
         for camera in cameras:
             key = f"observation.images.{camera}"
+            if continuous is not None:
+                from .continuous_recording import encode_aligned_video
+                video = staging / f"videos/{key}/chunk-000/file-000.mp4"
+                video.parent.mkdir(parents=True)
+                width, height = continuous['metadata']['source_resolution']
+                stats[key] = encode_aligned_video(path, continuous['frames'][camera], video, fps)
+                features[key] = {"dtype": "video", "shape": [height, width, 3],
+                    "names": ["height", "width", "channels"],
+                    "info": {"video.height": height, "video.width": width, "video.codec": "h264",
+                             "video.pix_fmt": "yuv420p", "video.fps": fps, "video.channels": 3,
+                             "video.is_depth_map": False, "has_audio": False}}
+                episode.update({f"videos/{key}/chunk_index": 0, f"videos/{key}/file_index": 0,
+                                f"videos/{key}/from_timestamp": 0.,
+                                f"videos/{key}/to_timestamp": count / fps})
+                continue
             first_shape = None
             total = np.zeros(3)
             squares = np.zeros(3)
@@ -271,12 +368,36 @@ def export_trial(path: Path, cameras: list[str], *, fps: int, robot_type: str,
             "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
             "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
             "features": features})
-        files = {str(file.relative_to(staging)): hashlib.sha256(file.read_bytes()).hexdigest()
+        stage_extension(extension, staging)
+        if shared is not None:
+            from .roboeval_shared import stage_shared
+            stage_shared(shared, staging)
+        files = {file.relative_to(staging).as_posix(): file_digest(file)
                  for file in staging.rglob("*") if file.is_file()}
         _json(staging / "meta/colosseum.json", {**context, "source_sha256": signature, "files": files})
+        validate_uploaded_extension(staging)
+        if extension is not None and shared is not None and len(cameras) == 3:
+            if training_delivery:
+                from .training_delivery import make_delivery as compact_dataset
+            else:
+                from .roboeval_compact import compact_dataset
+            compact_staging = staging.with_name(staging.name + '.compact')
+            compact_dataset(staging, compact_staging)
+            # Both directories are generated by this export invocation only.
+            shutil.rmtree(staging)
+            staging = compact_staging
+            validate_uploaded_extension(staging)
+        if training_delivery and not (staging / 'meta/colosseum.json').exists():
+            raise ValueError('Missing delivery metadata')
+        if training_delivery:
+            from .training_delivery import validate_delivery
+            validate_delivery(staging)
         staging.rename(destination)
     finally:
         if staging.exists():
             shutil.rmtree(staging)
-    _clear_source_images(path, cameras, all_rows)
+        if compact_staging is not None and compact_staging != staging and compact_staging.exists():
+            shutil.rmtree(compact_staging)
+    if export_destination is None:
+        _clear_source_images(path, cameras, all_rows)
     return destination

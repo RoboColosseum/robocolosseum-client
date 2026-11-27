@@ -1,0 +1,114 @@
+--- a/i2rt/motor_drivers/dm_driver.py
++++ b/i2rt/motor_drivers/dm_driver.py
+@@ -1,4 +1,5 @@
+ import logging
++from collections import deque
+ import os
+ import struct
+ import threading
+@@ -465,6 +466,10 @@
+             )
+ 
+         self.state = None
++        self._feedback_sequence = 0
++        self._feedback_monotonic_s = None
++        self._feedback_history = None
++        self._feedback_history_dropped = 0
+         self.state_lock = threading.Lock()
+         self._report_interval = report_interval
+         self._rate_recorder = RateRecorder(name=self, report_interval=report_interval)
+@@ -555,6 +560,8 @@
+             motor_feedback.append(self.motor_interface.motor_on(motor_id, motor_type))
+         self._update_absolute_positions(motor_feedback)
+         self.state = motor_feedback
++        self._feedback_sequence += 1
++        self._feedback_monotonic_s = time.monotonic()
+         self.running = True
+ 
+     def start_thread(self) -> None:
+@@ -633,7 +640,10 @@
+ 
+                     with self.state_lock:
+                         self.state = motor_feedback
++                        self._feedback_sequence += 1
++                        self._feedback_monotonic_s = time.monotonic()
+                         self._update_absolute_positions(motor_feedback)
++                        self._retain_feedback_locked()
+                     if self.same_bus_device_driver is not None:
+                         time.sleep(0.001)
+                         with self.same_bus_device_lock:
+@@ -683,7 +693,10 @@
+                         logging.warning("All motors recovered successfully")
+                         with self.state_lock:
+                             self.state = motor_feedback
++                            self._feedback_sequence += 1
++                            self._feedback_monotonic_s = time.monotonic()
+                             self._update_absolute_positions(motor_feedback)
++                            self._retain_feedback_locked()
+                         return True
+             except RuntimeError:
+                 continue
+@@ -716,6 +729,63 @@
+ 
+             motor_feedback.append(fd_back)
+         return motor_feedback
++
++    def get_feedback_snapshot(self):
++        """Copy the last complete bus sweep; never send a CAN command.
++
++        The timestamp is host receipt of a completed sweep, not a hardware clock
++        or a simultaneous sample of all motors. Repeated reads keep its sequence.
++        """
++        with self.state_lock:
++            return self._feedback_snapshot_locked()
++
++    def _feedback_snapshot_locked(self):
++        if self.state is None or self._feedback_monotonic_s is None:
++            raise RuntimeError('No complete motor feedback available')
++        return {
++                'sequence': self._feedback_sequence,
++                'received_monotonic_s': self._feedback_monotonic_s,
++                'running': bool(self.running),
++                'motor_ids': [state.id for state in self.state],
++                'position': [self._joint_position_real_to_sim_idx(self.absolute_positions[i], i)
++                             for i in range(len(self.state))],
++                'velocity': [state.velocity * self.motor_direction[i]
++                             for i, state in enumerate(self.state)],
++                'torque_nm': [state.torque * self.motor_direction[i]
++                              for i, state in enumerate(self.state)],
++            }
++
++    def _retain_feedback_locked(self):
++        # Opt-in numeric copies only; no FK, disk I/O, callback, CAN command or
++        # blocking queue operation is allowed on the motor feedback producer.
++        history = self._feedback_history
++        if history is not None:
++            if len(history) == history.maxlen:
++                self._feedback_history_dropped += 1
++            history.append(self._feedback_snapshot_locked())
++
++    def start_feedback_history(self, capacity=1024):
++        if not isinstance(capacity, int) or not 2 <= capacity <= 4096:
++            raise ValueError('Invalid feedback history capacity')
++        with self.state_lock:
++            if self._feedback_history is not None:
++                raise RuntimeError('Feedback history already active')
++            self._feedback_history = deque(maxlen=capacity)
++            self._feedback_history_dropped = 0
++            self._retain_feedback_locked()
++
++    def drain_feedback_history(self):
++        with self.state_lock:
++            if self._feedback_history is None:
++                raise RuntimeError('Feedback history not active')
++            rows = list(self._feedback_history)
++            self._feedback_history.clear()
++            return dict(rows=rows, dropped=self._feedback_history_dropped,
++                        running=bool(self.running))
++
++    def stop_feedback_history(self):
++        with self.state_lock:
++            self._feedback_history = None
+ 
+     def read_states(self, torques: Optional[np.ndarray] = None) -> List[MotorInfo]:
+         motor_infos = []

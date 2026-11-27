@@ -192,7 +192,7 @@ class _RealSenseCamera:
     the local Policy Server; recordings and uploads stay RGB.
     """
 
-    def __init__(self, serial, timeout_ms, depth=False):
+    def __init__(self, serial, timeout_ms, depth=False, *, continuous=False):
         try:
             import pyrealsense2 as rs
         except ImportError as exc:
@@ -206,7 +206,7 @@ class _RealSenseCamera:
         if depth:
             settings.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
         try:
-            profile = self.pipeline.start(settings)
+            self.profile = profile = self.pipeline.start(settings)
             if depth:
                 # Each depth pixel then indexes the same color pixel; images are
                 # sent at the native 640x480, so the intrinsics need no scaling.
@@ -215,6 +215,10 @@ class _RealSenseCamera:
                 k = profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
                 self.intrinsics = np.array([[k.fx, 0.0, k.ppx], [0.0, k.fy, k.ppy], [0.0, 0.0, 1.0]],
                                            dtype=np.float32)
+            if continuous:
+                actual = self.profile.get_stream(rs.stream.color).as_video_stream_profile()
+                if (actual.width(), actual.height(), actual.fps()) != (640, 480, 30):
+                    raise RuntimeError('Continuous recording requires native 640x480 at 30 FPS')
         except BaseException:
             try:
                 self.pipeline.stop()
@@ -244,6 +248,33 @@ class _RealSenseCamera:
             raise RuntimeError('YAM depth is unavailable before the first camera read')
         return np.ascontiguousarray(self._depth_m), self.intrinsics.copy()
 
+    def read_frame(self):
+        frame = self.pipeline.wait_for_frames(self.timeout_ms).get_color_frame()
+        if not frame:
+            raise RuntimeError('YAM camera returned no color frame')
+        return dict(pixels=np.asanyarray(frame.get_data()).copy(),
+            source_frame_number=int(frame.get_frame_number()),
+            source_timestamp_ms=float(frame.get_timestamp()),
+            source_timestamp_domain=str(frame.get_frame_timestamp_domain()),
+            received_monotonic_s=time.monotonic())
+
+    def calibration(self):
+        import pyrealsense2 as rs
+        stream = self.profile.get_stream(rs.stream.color).as_video_stream_profile()
+        values = stream.get_intrinsics()
+        return dict(width=values.width, height=values.height, fx=values.fx, fy=values.fy,
+                    ppx=values.ppx, ppy=values.ppy, distortion_model=str(values.model),
+                    distortion_coefficients=list(values.coeffs))
+
+    def factory_extrinsics(self):
+        return self._factory_extrinsics
+
+    def cache_factory_calibration(self):
+        import pyrealsense2 as rs
+        from ..roboeval_calibration import factory_extrinsics
+        self._factory_extrinsics = factory_extrinsics(self.profile.get_device(),
+            self.profile.get_stream(rs.stream.color), rs)
+
     def close(self):
         self.pipeline.stop()
 
@@ -253,8 +284,11 @@ class YAMRobot(Robot):
     has_gripper = True
     action_dim = 14
     action_space_name = 'joint_position'
+    roboeval_arm_ids = ('left', 'right')
 
     def __init__(self, config, *, depth=False):
+        if depth and getattr(config, 'roboeval_state_hz', 0):
+            raise ValueError('Continuous RoboEval RGB capture cannot be combined with depth inference')
         settings = dict(config.adapter_config)
         allowed = {'left_channel', 'right_channel', 'left_gripper_limits',
                    'right_gripper_limits', 'joint_low', 'joint_high',
@@ -324,16 +358,24 @@ class YAMRobot(Robot):
         timeout = settings.get('camera_timeout_ms', 1000)
         if type(timeout) is not int or not 1 <= timeout <= 10000:
             raise ValueError('camera_timeout_ms must be an integer in [1, 10000]')
+        self._roboeval = None
+        self._roboeval_calibration_error = None
+        self._camera_serials = dict(config.cameras)
         self.arms, self.cameras, self.closed = [], {}, False
         self._telemetry_stop = threading.Event()
         self._telemetry_thread = None
         try:
             # Check cameras before enabling either arm. No automatic homing.
             for name in CAMERAS:
-                self.cameras[name] = (_RealSenseCamera(config.cameras[name], timeout, depth=True)
+                self.cameras[name] = (_RealSenseCamera(config.cameras[name], timeout, depth=True, **({'continuous': True} if getattr(config, 'roboeval_state_hz', 0) else {}))
                                       if name == self.depth_role
-                                      else _RealSenseCamera(config.cameras[name], timeout))
+                                      else _RealSenseCamera(config.cameras[name], timeout, **({'continuous': True} if getattr(config, 'roboeval_state_hz', 0) else {})))
                 self.cameras[name].read()
+                if getattr(config, "roboeval_setup", ""):
+                    try:
+                        self.cameras[name].cache_factory_calibration()
+                    except Exception as error:
+                        self._roboeval_calibration_error = error
             if self.depth_role is not None:
                 self.cameras[self.depth_role].read_depth()
             for channel, calibration, offset in zip(channels, limits, calibration_offsets):
@@ -349,6 +391,63 @@ class YAMRobot(Robot):
             except Exception:
                 log.exception('YAM initialization cleanup failed')
             raise
+
+    def get_roboeval_feedback(self):
+        """Passive snapshot; uses feedback directions/offsets and the SDK mapper."""
+        result = {}
+        for side, arm in zip(self.roboeval_arm_ids, self.arms):
+            # The chain copies a coherent feedback sweep under its own cache lock.
+            # The robot state lock also covers gravity compensation and command
+            # updates; waiting for it here needlessly couples recording to control.
+            # The mapper is fixed after _open_arm completes startup calibration.
+            snapshot = arm.motor_chain.get_feedback_snapshot()
+            if snapshot['motor_ids'] != list(range(1, 8)):
+                raise ValueError('Unexpected YAM motor ordering in feedback')
+            q = arm.remapper.to_command_joint_pos_space(np.asarray(snapshot['position']))
+            result[side] = dict(snapshot, position=q[:6], velocity=snapshot['velocity'][:6],
+                                torque_nm=snapshot['torque_nm'][:6], gripper_reading=q[6],
+                                 gripper_effort_nm=float(snapshot['torque_nm'][6]))
+        return result
+
+    def start_roboeval_feedback_history(self):
+        started = []
+        try:
+            for arm in self.arms:
+                arm.motor_chain.start_feedback_history()
+                started.append(arm.motor_chain)
+        except Exception:
+            for chain in started:
+                chain.stop_feedback_history()
+            raise
+
+    def get_roboeval_feedback_history(self):
+        result = {}
+        for side, arm in zip(self.roboeval_arm_ids, self.arms):
+            batch = arm.motor_chain.drain_feedback_history()
+            if batch['dropped'] or not batch['running']:
+                raise RuntimeError(f'{side} feedback history lost {batch["dropped"]} sweeps or motor stopped')
+            rows = []
+            for snapshot in batch['rows']:
+                if snapshot['motor_ids'] != list(range(1, 8)):
+                    raise ValueError('Unexpected YAM motor ordering in feedback history')
+                q = arm.remapper.to_command_joint_pos_space(np.asarray(snapshot['position']))
+                rows.append(dict(snapshot, position=q[:6], velocity=snapshot['velocity'][:6],
+                                 torque_nm=snapshot['torque_nm'][:6], gripper_reading=q[6],
+                                 gripper_effort_nm=float(snapshot['torque_nm'][6])))
+            result[side] = rows
+        return result
+
+    def stop_roboeval_feedback_history(self):
+        for arm in self.arms:
+            arm.motor_chain.stop_feedback_history()
+
+    def roboeval_camera_metadata(self):
+        if getattr(self, '_roboeval_calibration_error', None) is not None:
+            raise RuntimeError('Factory camera metadata incomplete') from self._roboeval_calibration_error
+        return {name: dict(serial=self._camera_serials[name], intrinsics=camera.calibration(),
+                          factory_extrinsics=camera.factory_extrinsics(),
+                          arm_id=name.removesuffix('_image') if name != 'head_image' else None)
+                for name, camera in self.cameras.items()}
 
     def _print_gripper_telemetry(self):
         """Read SDK feedback caches only; never send commands or query the CAN bus.
@@ -414,6 +513,67 @@ class YAMRobot(Robot):
         if details:
             log.warning('YAM measured joint position outside configured bounds: %s', details)
         return positions
+
+    def roboeval_observation_timing(self):
+        return {name: camera.observation_timing() for name, camera in self.cameras.items()
+                if callable(getattr(camera, 'observation_timing', None))}
+
+    def roboeval_limits(self):
+        from i2rt.motor_drivers.utils import MotorType
+        def sdk_limits(arm):
+            clip = getattr(arm, '_clip_motor_torque', None)
+            bounds = getattr(arm, '_joint_limits', None)
+            return dict(
+                joint_bounds_rad=None if bounds is None else np.asarray(bounds).tolist(),
+                feedforward_torque_clip_abs_nm=float(clip) if clip is not None and np.isfinite(clip) else None,
+                feedforward_torque_clip_status=('unavailable' if clip is None else
+                    'finite' if np.isfinite(clip) else 'unbounded'),
+                torque_clip_semantics='SDK clips feedforward/gravity torque only; onboard PD can produce larger measured torque',
+                independent_measured_speed_limit_rad_s=None,
+                independent_total_torque_limit_nm=None,
+                operating_limit_status='not supplied by this adapter; do not substitute URDF placeholders or protocol bounds')
+        return {side: dict(joint_low_rad=self.low[6*i:6*(i+1)].tolist(),
+                          joint_high_rad=self.high[6*i:6*(i+1)].tolist(),
+                          joint_max_step_rad=self.max_step[6*i:6*(i+1)].tolist(),
+                          gripper_motor_limits_rad=np.asarray(arm._gripper_limits).tolist(),
+                          joint_step_mode=self.joint_step_mode, joint_limit_mode=self.joint_limit_mode,
+                          joint_limit_margin_rad=self.joint_limit_margin,
+                          nominal_control_hz=30,
+                          gripper_force_limit_n=getattr(arm, '_limit_gripper_force', None),
+                          gripper_force_limit_source='SDK arm._limit_gripper_force; negative means disabled',
+                          runtime_limits_source='active YAM adapter and SDK arm attributes',
+                          independent_firmware_limits_status='not_read',
+                          sdk_limits=sdk_limits(arm),
+                          step_limit_semantics='command displacement bound, not a measured joint-speed limit',
+                          protocol_limit_semantics='encoding clamp and feedback scaling range; not independently measured operating limits',
+                          motor_protocol_envelopes=[dict(motor_id=motor_id, motor_type=motor_type,
+                              torque_min_nm=MotorType.get_motor_constants(motor_type).TORQUE_MIN,
+                              torque_max_nm=MotorType.get_motor_constants(motor_type).TORQUE_MAX,
+                              velocity_min_rad_s=MotorType.get_motor_constants(motor_type).VELOCITY_MIN,
+                              velocity_max_rad_s=MotorType.get_motor_constants(motor_type).VELOCITY_MAX)
+                              for motor_id, motor_type in arm.motor_chain.motor_list[:6]])
+                for i, (side, arm) in enumerate(zip(self.roboeval_arm_ids, self.arms))}
+
+    def start_roboeval(self, recorder):
+        from ..roboeval_camera import ContinuousCamera
+        if self._roboeval is not None:
+            raise RuntimeError('YAM RoboEval already active')
+        # Check SDK support before attaching producers, without changing control.
+        self.get_roboeval_feedback()
+        self._roboeval = recorder
+        for name in tuple(self.cameras):
+            camera_key = name.removesuffix('_image') if name != 'head_image' else name
+            self.cameras[name] = ContinuousCamera(self.cameras[name], camera_key, recorder)
+
+    def stop_roboeval(self):
+        self._roboeval = None
+        for camera in self.cameras.values():
+            if callable(getattr(camera, 'detach', None)):
+                camera.detach()
+
+
+
+
 
     def get_observation(self):
         if self.closed:
@@ -543,7 +703,11 @@ class YAMRobot(Robot):
         try:
             # Both commands validated before either arm moves. CAN writes are sequential.
             self.arms[0].command_joint_pos(value[:7].copy())
+            if self._roboeval is not None:
+                self._roboeval.sent("left", value[:7])
             self.arms[1].command_joint_pos(value[7:].copy())
+            if self._roboeval is not None:
+                self._roboeval.sent("right", value[7:])
         except BaseException:
             try:
                 self.close()

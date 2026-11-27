@@ -147,6 +147,10 @@ class LocalPolicyClient(ColosseumClient):
                 expected_dim = (7 if expected_mode == 'eef_delta_pose' else self.model['action_dim'])
                 if mode != expected_mode or internal_dim != expected_dim:
                     raise ProtocolError('Local control mode or internal action dimension differs from Client config')
+                self.supports_recording_drain = False
+                with contextlib.suppress(ValueError, TypeError):
+                    extra_recording = json.loads(ready.get('message') or '{}')
+                    self.supports_recording_drain = isinstance(extra_recording, dict) and extra_recording.get('roboeval_evidence_v1') is True
                 self.native_control_mode = mode
                 self.native_action_dim = internal_dim
                 extras = []
@@ -278,6 +282,17 @@ class LocalPolicyClient(ColosseumClient):
                     message = error.message.strip()
                     code = error.code.strip() or 'LOCAL_POLICY_ERROR'
                     raise ProtocolError(f'Local inference failed: {code}{": " + message if message else ""}')
+                if frame.type == pb.LOCAL_CONTROL and getattr(self, '_recording_drain', None) is not None:
+                    payload = json.loads(frame.payload)
+                    future = self._recording_drain
+                    if not future.done():
+                        if 'recording_drain_error' in payload:
+                            future.set_exception(ValueError('Terminal recording unavailable: ' + payload['recording_drain_error']))
+                        elif 'recording_drain' in payload:
+                            future.set_result(payload['recording_drain'])
+                        else:
+                            future.set_exception(ValueError('Invalid terminal recording reply'))
+                    continue
                 if frame.type != pb.ACTION_PLAN:
                     raise ProtocolError('Invalid local inference frame')
                 self.incoming.put_nowait(frame)
@@ -367,6 +382,14 @@ class LocalPolicyClient(ColosseumClient):
         if not plan.actions.shape or plan.actions.shape[0] > self.model['max_horizon']:
             raise ProtocolError('Local policy action horizon exceeds the assigned limit')
         return plan
+
+    async def drain_recording(self):
+        if not getattr(self, 'supports_recording_drain', False):
+            raise ValueError('Policy does not support terminal recording evidence')
+        self._recording_drain = asyncio.get_running_loop().create_future()
+        await self.connection.send(pb.RelayFrame(protocol_version=1, type=pb.LOCAL_CONTROL,
+            session_id=self.run_id, payload=b'roboeval_drain_v1').SerializeToString())
+        return await asyncio.wait_for(asyncio.shield(self._recording_drain), timeout=30)
 
     async def finish(self):
         if self.heartbeat_task:

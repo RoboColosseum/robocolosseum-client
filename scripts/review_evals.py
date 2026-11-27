@@ -49,6 +49,11 @@ def preview(ev, run_id, cam):
         return dst
     if (src / cam / 'video.mp4').exists():
         return src / cam / 'video.mp4'
+    status = src / 'recording-status.json'
+    if status.exists() and json.loads(status.read_text()).get('image_storage') == 'continuous_source':
+        from colosseum_client.recording import continuous_preview
+        with LOCK:
+            return continuous_preview(src, cam, dst)
     frames = src / 'frames.jsonl'
     if not frames.exists() or not (src / cam).is_dir():
         return None
@@ -61,8 +66,10 @@ def preview(ev, run_id, cam):
         lines = []
         for i, row in enumerate(rows):
             d = rows[i + 1]['seconds'] - row['seconds'] if i + 1 < len(rows) else 1 / 15
-            lines += [f"file '{(src / cam / f'{row['frame']:06d}.png').resolve()}'", f'duration {max(d, .001):.6f}']
-        lines.append(f"file '{(src / cam / f'{rows[-1]['frame']:06d}.png').resolve()}'")
+            frame_path = (src / cam / f"{row['frame']:06d}.png").resolve()
+            lines += [f"file '{frame_path}'", f'duration {max(d, .001):.6f}']
+        last_frame_path = (src / cam / f"{rows[-1]['frame']:06d}.png").resolve()
+        lines.append(f"file '{last_frame_path}'")
         dst.parent.mkdir(parents=True, exist_ok=True)
         listing = dst.with_suffix('.txt')
         listing.write_text('\n'.join(lines) + '\n')
@@ -148,6 +155,7 @@ def eval_page(ev, msg=''):
                  "<p class=mut>1 is easiest; 10 is hardest. Enter once for this task; shared by A and B.</p></div>")
     for r in runs(d):
         side = r['side']
+        events = b6_controls(r['id'], d.get('b6', {}).get(r['id'], {}), dis)
         o = outcomes.get(side, {})
         val = '' if o.get('partial_success') is None else round(o['partial_success'] * 100)
         if r['recorded']:
@@ -163,7 +171,7 @@ def eval_page(ev, msg=''):
             vids, ctl = "<p class=mut>Not recorded yet (run it with --resume first).</p>", ''
         parts.append(f"<div class=card><h2>Policy {side} <span class=mut>{html.escape(r['id'])}</span></h2>{ctl}"
                      f"<div class=vids>{vids}</div><label>{side} partial success (0–100)</label>"
-                     f"<input type=number min=0 max=100 step=1 name=score_{side} value='{val}'{dis}></div>")
+                     f"<input type=number min=0 max=100 step=1 name=score_{side} value='{val}'{dis}>{events}</div>")
     pref = res.get('preference') or d.get('draft', {}).get('preference')
     opts = ''.join(f"<option value='{v}'{' selected' if pref == v else ''}>{v or '—'}" for v in ('', 'A', 'B', 'tie'))
     parts.append(f"<div class=card><label>Preference</label><select name=preference{dis}>{opts}</select>"
@@ -189,13 +197,49 @@ function rate(s,r){V(s).forEach(v=>v.playbackRate=+r)}
     return page(ev, ''.join(parts))
 
 
-def save(ev, form, *, require_difficulty=False):
+def b6_controls(run_id, labels, disabled=''):
+    from colosseum_client.roboeval_b6 import FIELDS, VALUES
+    controls = []
+    for field in FIELDS:
+        options = ['<option value="">Select…</option>']
+        for value in VALUES:
+            selected = ' selected' if labels.get(field) == value else ''
+            options.append(f'<option value="{value}"{selected}>{value.replace("_", " ")}</option>')
+        name = html.escape(f'b6:{run_id}:{field}', quote=True)
+        controls.append(f'<label>{field.title()} <select name="{name}"{disabled}>' + ''.join(options) + '</select></label>')
+    return '<fieldset><legend>Observed events</legend>' + ''.join(controls) + '</fieldset>'
+
+
+def requires_b6(ev):
+    document = load(ev)
+    for run in document['assignment'].get('runs', []):
+        context = ROOT / ev / run['id'] / 'recording-context.json'
+        if context.exists() and json.loads(context.read_text()).get('roboeval_shared_required') is True:
+            return True
+    return False
+
+
+def save(ev, form, *, require_difficulty=False, b6=None, require_b6=False):
     path = ROOT / ev / 'manifest.json'
     d = json.loads(path.read_text())
     if d.get('submitted') or d.get('review') == 'superseded':
         return '<span class=warn>This eval is closed; nothing changed.</span>'
     set_difficulty(path.parent, d, form.get('task_difficulty', [d.get('task_difficulty')])[0],
                    required=require_difficulty)
+    from colosseum_client.roboeval_b6 import validate_b6
+    if b6 is None:
+        b6 = {key: dict(value) for key, value in d.get('b6', {}).items()}
+        from colosseum_client.roboeval_b6 import FIELDS
+        allowed = {f"b6:{run['id']}:{field}" for run in d['assignment']['runs'] for field in FIELDS}
+        if any(key.startswith('b6:') and key not in allowed for key in form):
+            raise ValueError('B6 contains an unknown run or event field')
+        for run in d['assignment']['runs']:
+            labels = b6.setdefault(run['id'], {})
+            for field in FIELDS:
+                key = f"b6:{run['id']}:{field}"
+                if key in form:
+                    labels[field] = form[key][0]
+    d['b6'] = validate_b6(d['assignment'], b6, required=require_b6)
     outcomes = dict(d.get('outcomes', {}))
     for r in runs(d):
         raw = form.get(f"score_{r['side']}", [''])[0].strip()
@@ -325,7 +369,8 @@ class H(BaseHTTPRequestHandler):
                 reason = form.get('reason', [''])[0].strip()
                 msg = router(p[1], 'discard', reason) if reason else '<span class=warn>A reason is required.</span>'
             else:
-                msg = save(p[1], form, require_difficulty=action == 'submit')
+                msg = save(p[1], form, require_difficulty=action == 'submit',
+                           require_b6=action == 'submit' and requires_b6(p[1]))
                 if action == 'submit':
                     msg = (router(p[1], 'submit') if 'result' in load(p[1])
                            else '<span class=warn>Not submitted: every score and a preference are required.</span>')

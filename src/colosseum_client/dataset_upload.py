@@ -1,10 +1,12 @@
 """Backfill datasets for owned, finished evaluations without executing a robot."""
+from .dataset_paths import exported_dataset
+
 import argparse
 import json
 from pathlib import Path
 import re
 
-from .evaluation import EvalAPI, save
+from .evaluation import EvalAPI, save, export_expanded_run, expanded_recording
 from .robot_config import RobotClientConfig
 
 
@@ -25,11 +27,17 @@ def main():
         for manifest in manifests:
             local = json.loads(manifest.read_text())
             paths = list(manifest.parent.glob("*/lerobot/meta/info.json"))
-            if not paths:
+            expanded = expanded_recording(manifest.parent, local['assignment'])
+            if not paths and not expanded:
                 continue
             assignment = api.request("GET", f"/assignments/{manifest.parent.name}")
             for run in assignment["runs"]:
-                dataset = manifest.parent / run["id"] / "lerobot"
+                if expanded:
+                    if not local.get('submitted') or not local.get('result'):
+                        raise ValueError('Expanded backfill requires confirmed final result')
+                    dataset = export_expanded_run(config, local['assignment'], run, manifest.parent, local['result'])
+                else:
+                    dataset = exported_dataset(manifest.parent / run['id'], local.get('dataset_exports', {}).get(run['id']))
                 if not dataset.is_dir():
                     continue
                 api.upload_dataset(run["id"], dataset)

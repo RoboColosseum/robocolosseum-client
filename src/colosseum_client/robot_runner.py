@@ -30,6 +30,8 @@ def protobuf_observation(
     image_encoding: str = "raw",
     jpeg_quality: int = 85,
 ) -> pb.Observation:
+    if image_encoding not in ('raw', 'raw_rgb', 'jpeg', 'png'):
+        raise ValueError('image_encoding must be raw, raw_rgb, jpeg or png')
     message = pb.Observation(
         robot_time_ns=time.time_ns(),
         control_step=control_step,
@@ -45,6 +47,24 @@ def protobuf_observation(
             raise ValueError(f"duplicate observation state {key}")
         message.state[key].CopyFrom(tensor_from_numpy(np.asarray(value)))
     capture_time_ns = time.time_ns()
+    if image_encoding == 'png':
+        from concurrent.futures import ThreadPoolExecutor
+        from PIL import Image
+        def encode(item):
+            image_id, image = item
+            rgb = np.ascontiguousarray(image, dtype=np.uint8)
+            if rgb.ndim != 3 or rgb.shape[2] != 3:
+                raise ValueError(f'{image_id} must have RGB shape (height, width, 3)')
+            buffer = io.BytesIO()
+            Image.fromarray(rgb).save(buffer, format='PNG', compress_level=1)
+            return image_id, rgb.shape[1], rgb.shape[0], buffer.getvalue()
+        # PNG's native compression releases the GIL. Three independent images
+        # can compress concurrently without changing their pixels or order.
+        with ThreadPoolExecutor(max_workers=min(3, max(1, len(observation.images)))) as pool:
+            for image_id, width, height, data in pool.map(encode, observation.images.items()):
+                message.sensors.add(sensor_id=image_id, encoding=pb.PNG,
+                    capture_time_ns=capture_time_ns, width=width, height=height, data=data)
+        return message
     for image_id, image in observation.images.items():
         rgb = np.ascontiguousarray(image, dtype=np.uint8)
         if rgb.ndim != 3 or rgb.shape[2] != 3:

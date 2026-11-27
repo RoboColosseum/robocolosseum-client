@@ -1,0 +1,1 @@
+Test source: i2rt-robotics/i2rt commit 120c3c81400171174604e503943f8d1ebc891058 plus patches/i2rt-feedback-history.patch. Tests extract methods without importing hardware dependencies or constructing CAN interfaces. Retain upstream license and attribution before final packaging.

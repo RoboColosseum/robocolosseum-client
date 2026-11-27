@@ -18,9 +18,14 @@ def difficulty(value, *, required=False):
 def exported_difficulties(folder, document):
     values = []
     for run in document['assignment']['runs']:
-        marker = Path(folder) / run['id'] / 'lerobot/meta/colosseum.json'
-        if marker.exists():
-            values.append(json.loads(marker.read_text()).get('task_difficulty'))
+        for relative in ('lerobot/meta/colosseum.json',
+                         'dual_rate/lerobot/meta/colosseum.json',
+                         'export_30hz/lerobot/meta/colosseum.json',
+                         'export_clean_30hz/lerobot/meta/colosseum.json',
+                         'export_physical_30hz/lerobot/meta/colosseum.json'):
+            marker = Path(folder) / run['id'] / relative
+            if marker.exists():
+                values.append(json.loads(marker.read_text()).get('task_difficulty'))
     return values
 
 

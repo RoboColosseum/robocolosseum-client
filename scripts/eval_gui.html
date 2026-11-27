@@ -538,6 +538,8 @@ async function loadDetail(id){
     <div style="margin-top:12px">${r.recorded?(r.cams.includes('head_image')?v('head_image'):'')+`<div class="vsmall">${r.cams.filter(c=>c!='head_image').map(c=>`<div>${v(c)}<div class="mut" style="font-size:12px">${names[c]}</div></div>`).join('')}</div>`:'<p class="mut">Not recorded.</p>'}</div>
     <label>What did ${r.side} do? <span style="text-transform:none;font-weight:400">English or 中文</span></label>
     <textarea id="ob-${r.side}" placeholder="Your observations: what it got right, where it failed, anything unsafe…" ${dis}>${esc(r.notes)}</textarea>
+    <fieldset><legend>Observed events</legend>${['drop','damage','spill'].map(field=>`<label>${field[0].toUpperCase()+field.slice(1)}
+    <select data-b6-run="${esc(r.id)}" data-b6-field="${field}" ${dis}><option value="">Select…</option>${['yes','no','unknown','not_applicable'].map(value=>`<option value="${value}" ${(r.b6||{})[field]===value?'selected':''}>${value.replaceAll('_',' ')}</option>`).join('')}</select></label>`).join('')}</fieldset>
     <label>How much of the task did ${r.side} complete?</label>
     <div class="score"><input type="range" min="0" max="100" step="5" id="rg-${r.side}" value="${r.score??0}" ${dis}><input class="num" type="number" min="0" max="100" id="sc-${r.side}" value="${r.score??''}" placeholder="–" ${dis}></div>
     <div class="mut" style="font-size:12px;display:flex;justify-content:space-between"><span>0 · nothing</span><span>50 · halfway</span><span>100 · fully done</span></div></div>`};
@@ -577,7 +579,8 @@ async function loadDetail(id){
     document.querySelectorAll(`[data-f="${b.dataset.f}"]`).forEach(x=>x.classList.toggle('on',x==b));fcount()});
   document.querySelectorAll('[data-pref]').forEach(b=>b.onclick=()=>{pref=b.dataset.pref;document.querySelectorAll('[data-pref]').forEach(x=>x.classList.toggle('on',x==b))});
   const body=action=>{const o={action,preference:pref,feedback:$('#fb').value,notes:{},factors:{...factors},task_difficulty:$('#taskDifficulty').value};
-    d.runs.forEach(r=>{o['score_'+r.side]=$('#sc-'+r.side)?.value??'';o.notes[r.side]=$('#ob-'+r.side)?.value??''});return o};
+    d.runs.forEach(r=>{o['score_'+r.side]=$('#sc-'+r.side)?.value??'';o.notes[r.side]=$('#ob-'+r.side)?.value??''});
+    o.b6={};document.querySelectorAll('[data-b6-run]').forEach(input=>{(o.b6[input.dataset.b6Run]??={})[input.dataset.b6Field]=input.value});return o};
   if(locked)return;
   $('#genBtn').onclick=async()=>{
     const b=body('save');if(!Object.values(b.notes).some(x=>x.trim()))return toast('Write a few observations for each policy first.');

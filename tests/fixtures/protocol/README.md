@@ -1,0 +1,1 @@
+Unmodified protocol generated source from client commit 460ef9a1d5688d50ccef2111852c3c5f7ce30e22, retained for wire compatibility tests under the project license. Paired descriptor equality is checked in integration verification.
