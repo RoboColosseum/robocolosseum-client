@@ -243,6 +243,19 @@ From the Client checkout, after filling configuration:
 `test: true` bypasses the I2RT and camera drivers. With a compatible assignment
 it checks synthetic 12-joint / 2-gripper transport, not physical integration.
 
+### Perceptron Isaac 0.5
+
+[Isaac 0.5 YAM](https://huggingface.co/PerceptronAI/Isaac-0.5-YAM) needs no
+Client change. It uses the same 14-value `joint_position` contract at 30 Hz,
+with `head_image`, `left_image` and `right_image` as its top, left and right
+views. The Policy Server serves it with `adapter: isaac_yam` (see its
+`docs/yam.md#isaac-05-yam`). It returns 60-step chunks, so the Router
+registration needs `max_horizon: 60`, or the worker must truncate with
+`--isaac-return-steps`. The arms hold while each chunk is computed, about 1 s on
+an H100. The default `deadline_ms: 30000` covers that. The checkpoint was
+trained on 640x360 images and stretches the Client's 640x480 frames to that
+size, so check the camera framing in the first trials.
+
 ## Depth for CaP-X models
 
 A Policy Server CaP-X model registered for YAM, named `<llm>-capx` (for
